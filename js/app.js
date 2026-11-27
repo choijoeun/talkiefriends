@@ -513,96 +513,127 @@
       speak: false
     });
 
-    const ok = await window.TFGeminiLive.connect({
-      apiKey: state.settings.apiKey.trim(),
-      useServerToken,
-      model: state.settings.liveModel || 'gemini-3.8-live',
-      voiceName: ch.geminiVoice || 'Puck',
-      systemInstruction,
-      openingPrompt,
-      autoHint: state.settings.autoHint,
-      onConnected: () => {
-        session.liveConnecting = false;
-        updateVoiceModeBadge();
-        updateGiantActionButton();
-        renderLivePuppet('idle');
-        spawnParticles(prof.particle);
-        showToast(`🔴 ${ch.nameKr}와 Gemini Live 연결 완료! 버튼 누르지 않고 바로 말해요!`);
-      },
-      onSpeakingState: (speaking, rms) => {
-        applyLiveRmsLipSync(speaking, rms);
-      },
-      onUserTranscript: (text, isFinal) => {
-        if (!text) return;
-        if (!isFinal) {
-          $('silence-hud').classList.remove('hidden');
-          $('silence-status-text').textContent = `🗣️ "${text}"`;
-          return;
-        }
-        hideSilenceHud();
-        if (window.TFEngine.isReportTrigger(text)) {
-          finishLessonAndOpenReport();
-          return;
-        }
-        if (window.TFEngine.isDrawRequest(text)) {
-          showToast('🔒 규칙 0: Live 음성 대화 중에는 그림 생성이 잠겨 있어요!');
-        }
-        session.transcript.push({ role: 'child', speaker: '아이', text, tag: '🔴 실시간 음성' });
-        session.turnCount += 1;
-        const analysis = window.TFEngine.analyzeLiveTranscriptTurn(text);
-        if (analysis.pillar && session.pillars[analysis.pillar] !== undefined) {
-          session.pillars[analysis.pillar] += 1;
-        }
-        if (analysis.weakEntry) {
-          session.corrections.push(analysis.weakEntry);
-          upsertWeakExpression(analysis.weakEntry);
-        } else {
-          session.stars += 1;
-        }
-        renderMissionDots();
-      },
-      onModelTranscript: (text, isFinal) => {
-        if (!text) return;
-        session.lastSpokenEn = text;
-        $('bubble-english').textContent = text;
-        $('bubble-korean-hint').textContent = '🔴 Gemini Live 실시간 대화 — 마이크가 열려 있어요! 바로 이어서 말해 보세요.';
-        $('bubble-korean-hint').classList.toggle('hidden', !state.settings.showKoreanHint);
-        if (isFinal) {
-          session.transcript.push({
-            role: 'ai',
-            speaker: ch.nameKr,
-            text,
-            tag: `🔴 Gemini Live (${prof.nameKr})`
-          });
-        }
-      },
-      onSilenceTick: (ratio, rem, active) => {
-        if (!active) {
+    let lastErr = '';
+    const tryConnectWithModel = (modelId) =>
+      window.TFGeminiLive.connect({
+        apiKey: state.settings.apiKey.trim(),
+        useServerToken,
+        model: modelId,
+        voiceName: ch.geminiVoice || 'Puck',
+        systemInstruction,
+        openingPrompt,
+        autoHint: state.settings.autoHint,
+        onConnected: () => {
+          session.liveConnecting = false;
+          updateVoiceModeBadge();
+          updateGiantActionButton();
+          renderLivePuppet('idle');
+          spawnParticles(prof.particle);
+          showToast(`🔴 ${ch.nameKr}와 Gemini Live 연결 완료! 버튼 누르지 않고 바로 말해요!`);
+        },
+        onSpeakingState: (speaking, rms) => {
+          applyLiveRmsLipSync(speaking, rms);
+        },
+        onUserVoiceState: (vs) => {
+          if (vs === 'speaking') {
+            renderLivePuppet('listening');
+            $('silence-hud').classList.remove('hidden');
+            $('silence-progress-fill').style.width = '100%';
+            $('silence-status-text').textContent = '🎤 아이 목소리를 잘 듣고 있어요! 편하게 말해 봐요';
+          } else if (vs === 'processing') {
+            renderLivePuppet('idle');
+            $('silence-hud').classList.remove('hidden');
+            $('silence-progress-fill').style.width = '60%';
+            $('silence-status-text').textContent = `✨ ${ch.nameKr}가 대답을 준비하고 있어요...`;
+          }
+        },
+        onUserTranscript: (text, isFinal) => {
+          if (!text) return;
+          if (!isFinal) {
+            $('silence-hud').classList.remove('hidden');
+            $('silence-status-text').textContent = `🗣️ "${text}"`;
+            return;
+          }
           hideSilenceHud();
-          return;
+          if (window.TFEngine.isReportTrigger(text)) {
+            finishLessonAndOpenReport();
+            return;
+          }
+          if (window.TFEngine.isDrawRequest(text)) {
+            showToast('🔒 규칙 0: Live 음성 대화 중에는 그림 생성이 잠겨 있어요!');
+          }
+          session.transcript.push({ role: 'child', speaker: '아이', text, tag: '🔴 실시간 음성' });
+          session.turnCount += 1;
+          const analysis = window.TFEngine.analyzeLiveTranscriptTurn(text);
+          if (analysis.pillar && session.pillars[analysis.pillar] !== undefined) {
+            session.pillars[analysis.pillar] += 1;
+          }
+          if (analysis.weakEntry) {
+            session.corrections.push(analysis.weakEntry);
+            upsertWeakExpression(analysis.weakEntry);
+          } else {
+            session.stars += 1;
+          }
+          renderMissionDots();
+        },
+        onModelTranscript: (text, isFinal) => {
+          if (!text) return;
+          hideSilenceHud();
+          session.lastSpokenEn = text;
+          $('bubble-english').textContent = text;
+          $('bubble-korean-hint').textContent = '🔴 Gemini Live 실시간 대화 — 마이크가 열려 있어요! 바로 이어서 말해 보세요.';
+          $('bubble-korean-hint').classList.toggle('hidden', !state.settings.showKoreanHint);
+          if (isFinal) {
+            session.transcript.push({
+              role: 'ai',
+              speaker: ch.nameKr,
+              text,
+              tag: `🔴 Gemini Live (${prof.nameKr})`
+            });
+          }
+        },
+        onSilenceTick: (ratio, rem, active) => {
+          if (!active) {
+            hideSilenceHud();
+            return;
+          }
+          $('silence-hud').classList.remove('hidden');
+          $('silence-progress-fill').style.width = `${Math.round(ratio * 100)}%`;
+          $('silence-status-text').textContent = `⏳ 천천히 생각해요... ${rem.toFixed(1)}초 뒤 ${ch.nameKr}가 먼저 말을 걸어요`;
+        },
+        onSilenceNudge: () => {
+          showToast(`💡 4.5초 침묵 감지 — ${ch.nameKr}가 다정하게 힌트를 건네요!`);
+        },
+        onError: (errMsg) => {
+          lastErr = errMsg;
+          const diag = $('gemini-live-test-result');
+          if (diag) diag.textContent = `⚠️ ${errMsg}`;
+        },
+        onDisconnected: () => {
+          session.liveConnecting = false;
+          applyLiveRmsLipSync(false, 0);
+          hideSilenceHud();
+          updateVoiceModeBadge();
+          updateGiantActionButton();
         }
-        $('silence-hud').classList.remove('hidden');
-        $('silence-progress-fill').style.width = `${Math.round(ratio * 100)}%`;
-        $('silence-status-text').textContent = `⏳ 천천히 생각해요... ${rem.toFixed(1)}초 뒤 ${ch.nameKr}가 먼저 말을 걸어요`;
-      },
-      onSilenceNudge: () => {
-        showToast(`💡 4.5초 침묵 감지 — ${ch.nameKr}가 다정하게 힌트를 건네요!`);
-      },
-      onError: (errMsg) => {
-        showToast(`⚠️ ${errMsg}`);
-      },
-      onDisconnected: () => {
-        session.liveConnecting = false;
-        applyLiveRmsLipSync(false, 0);
-        hideSilenceHud();
-        updateVoiceModeBadge();
-        updateGiantActionButton();
+      });
+
+    const primaryModel = state.settings.liveModel || 'gemini-3.8-live';
+    let ok = await tryConnectWithModel(primaryModel);
+    if (!ok && !useServerToken) {
+      const fallbackModel = primaryModel === 'gemini-3.8-live'
+        ? 'gemini-2.5-flash-native-audio-preview-12-2025'
+        : 'gemini-3.8-live';
+      ok = await tryConnectWithModel(fallbackModel);
+      if (ok) {
+        state.settings.liveModel = fallbackModel;
+        saveState();
       }
-    });
+    }
 
     if (!ok) {
       session.liveConnecting = false;
-      showToast('💡 기본 음성 대화 모드로 자연스럽게 전환했어요!');
+      showToast(lastErr ? `⚠️ ${lastErr} — 기본 음성 모드로 전환했어요` : '💡 기본 음성 대화 모드로 자연스럽게 전환했어요!');
       startStandardLiveSession();
     }
   }
@@ -1932,6 +1963,56 @@
         else if (s === 'silence') triggerProactiveSilenceHint();
         else if (s === 'draw_blocked') handleChildUtterance('그림 그려줘');
       });
+    });
+
+    $('test-gemini-live-btn').addEventListener('click', async () => {
+      const key = $('setting-api-key').value.trim();
+      const sel = $('setting-live-model');
+      const resultEl = $('gemini-live-test-result');
+      const btn = $('test-gemini-live-btn');
+      if (!key) {
+        resultEl.textContent = '⚠️ 먼저 위 칸에 AI Studio 무료 API 키(AIza...)를 붙여넣어 주세요!';
+        showToast('⚠️ API 키를 먼저 입력해 주세요!');
+        return;
+      }
+      btn.disabled = true;
+      btn.textContent = '⏳ 실시간 음성 서버 테스트 중...';
+      resultEl.textContent = '🔍 1/2 API 키·지원 모델 확인 및 WebSocket 음성 응답 테스트 중...';
+
+      const res = await window.TFGeminiLive.testConnection({
+        apiKey: key,
+        preferredModel: sel.value
+      });
+
+      btn.disabled = false;
+      btn.textContent = '🧪 지금 무료 API 실시간 음성 테스트';
+
+      if (res.ok) {
+        // Ensure working model exists in dropdown and auto-select + save it!
+        if (!Array.from(sel.options).some((o) => o.value === res.workingModel)) {
+          const opt = document.createElement('option');
+          opt.value = res.workingModel;
+          opt.textContent = `${res.workingModel} (자동 감지됨!)`;
+          sel.prepend(opt);
+        }
+        sel.value = res.workingModel;
+        state.settings.apiKey = key;
+        state.settings.liveModel = res.workingModel;
+        state.settings.useGeminiLive = true;
+        $('setting-use-gemini-live').checked = true;
+        saveState();
+        updateVoiceModeBadge();
+        updateGiantActionButton();
+        const captionNote = res.transcript ? ` · 자막: "${res.transcript}"` : '';
+        resultEl.textContent = `${res.message}${captionNote} — 설정 자동 저장 완료! 이제 무대에서 "실시간 놀자!" 버튼을 눌러 바로 대화하세요!`;
+        showToast('🎉 무료 API 실시간 음성 연결 성공! 자동 저장되었어요!');
+      } else {
+        const listNote = res.availableLiveModels && res.availableLiveModels.length
+          ? ` (이 키의 지원 Live 모델: ${res.availableLiveModels.join(', ')})`
+          : '';
+        resultEl.textContent = `❌ ${res.message}${listNote}`;
+        showToast('⚠️ 실시간 연결 테스트 실패 — 아래 상세 원인을 확인해 주세요.');
+      }
     });
 
     $('save-settings-btn').addEventListener('click', () => {

@@ -1,10 +1,11 @@
 /* ==========================================================================
-   TalkieFriends v5 — Real-Time Gemini Multimodal Live API Engine (WebSocket)
+   TalkieFriends v5.3 — Real-Time Gemini Multimodal Live API Engine (WebSocket)
    - Hands-free bidirectional audio: 16kHz PCM mic -> Gemini Live -> 24kHz PCM voice
-   - Real-time AnalyserNode RMS audio-driven lip-sync for Bluey & Friends!
-   - Child-friendly VAD (prefixPaddingMs: 300, silenceDurationMs: 1600)
-   - Automatic barge-in cancellation + 4.5s silence proactive hint nudge
-   - Supports BOTH Server Ephemeral Tokens AND Direct User API Key
+   - Client-side RMS VAD with 425ms pre-speech ring buffer + activityStart/activityEnd
+     (fixes Gemini 3.8 Live silent-audio server-VAD issue AND saves 80%+ Free Tier quota!)
+   - Echo-safe child barge-in + 1.35s child-friendly pause tolerance
+   - Real-time AnalyserNode RMS audio-driven lip-sync for Bluey & Friends
+   - Built-in 1-click Live Connection & Model Discovery Tester (testConnection)
    ========================================================================== */
 
 window.TFGeminiLive = (function () {
@@ -20,7 +21,6 @@ window.TFGeminiLive = (function () {
   let nextPlayTime = 0;
   let activeSources = [];
   let lipSyncRaf = null;
-  let silenceTimer = null;
   let silenceTickInterval = null;
   let connected = false;
   let isModelSpeaking = false;
@@ -28,6 +28,16 @@ window.TFGeminiLive = (function () {
   let currentCallbacks = {};
   let pendingInputTranscript = '';
   let pendingOutputTranscript = '';
+
+  // Client-side VAD state (works reliably on Gemini 3.8 Live + saves Free Tier tokens!)
+  let isUserSpeaking = false;
+  let lastSpeechAt = 0;
+  let preSpeechRing = [];
+  const PRE_SPEECH_CHUNKS = 5; // ~425ms lead-in buffer so child's 1st syllable is never clipped
+  const SPEECH_START_IDLE = 0.020;
+  const SPEECH_START_BARGE_IN = 0.052; // higher threshold during AI playback to ignore speaker echo
+  const SPEECH_CONTINUE = 0.014;
+  const CHILD_END_SILENCE_MS = 1350; // generous 1.35s pause tolerance for 6~7yo kids
 
   function arrayBufferToBase64(buffer) {
     const bytes = new Uint8Array(buffer);
@@ -70,6 +80,14 @@ window.TFGeminiLive = (function () {
       pcm[i] = s < 0 ? s * 0x8000 : s * 0x7fff;
     }
     return pcm;
+  }
+
+  function sendJson(obj) {
+    if (ws && ws.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify(obj));
+      return true;
+    }
+    return false;
   }
 
   function clearPlaybackQueue() {
@@ -143,7 +161,6 @@ window.TFGeminiLive = (function () {
   }
 
   function stopSilenceWatch() {
-    if (silenceTimer) { clearTimeout(silenceTimer); silenceTimer = null; }
     if (silenceTickInterval) { clearInterval(silenceTickInterval); silenceTickInterval = null; }
     if (currentCallbacks.onSilenceTick) currentCallbacks.onSilenceTick(0, 0, false);
   }
@@ -153,12 +170,7 @@ window.TFGeminiLive = (function () {
     const limitMs = 4500;
     const start = Date.now();
     silenceTickInterval = setInterval(() => {
-      if (!connected || isModelSpeaking) {
-        stopSilenceWatch();
-        return;
-      }
-      // If child is actively talking (mic RMS above gentle threshold), reset wait!
-      if (micRms > 0.025) {
+      if (!connected || isModelSpeaking || isUserSpeaking) {
         stopSilenceWatch();
         return;
       }
@@ -174,9 +186,9 @@ window.TFGeminiLive = (function () {
   }
 
   function sendSilenceHintNudge() {
-    if (!ws || ws.readyState !== WebSocket.OPEN) return;
+    if (!connected) return;
     if (currentCallbacks.onSilenceNudge) currentCallbacks.onSilenceNudge();
-    ws.send(JSON.stringify({
+    sendJson({
       clientContent: {
         turns: [{
           role: 'user',
@@ -186,7 +198,18 @@ window.TFGeminiLive = (function () {
         }],
         turnComplete: true
       }
-    }));
+    });
+  }
+
+  function sendAudioChunk(b64Pcm) {
+    sendJson({
+      realtimeInput: {
+        audio: {
+          mimeType: 'audio/pcm;rate=16000',
+          data: b64Pcm
+        }
+      }
+    });
   }
 
   async function startMicCapture() {
@@ -201,40 +224,212 @@ window.TFGeminiLive = (function () {
 
     const AudioCtx = window.AudioContext || window.webkitAudioContext;
     captureCtx = new AudioCtx();
+    if (captureCtx.state === 'suspended') {
+      await captureCtx.resume().catch(() => {});
+    }
     const source = captureCtx.createMediaStreamSource(micStream);
     processorNode = captureCtx.createScriptProcessor(4096, 1, 1);
+
+    isUserSpeaking = false;
+    lastSpeechAt = 0;
+    preSpeechRing = [];
 
     processorNode.onaudioprocess = (event) => {
       if (!ws || ws.readyState !== WebSocket.OPEN || !connected) return;
       const input = event.inputBuffer.getChannelData(0);
 
-      // Measure RMS for child speech activity indicator
       let sum = 0;
       for (let i = 0; i < input.length; i++) sum += input[i] * input[i];
       micRms = Math.sqrt(sum / input.length);
-      if (micRms > 0.028) {
-        stopSilenceWatch();
-      }
       if (currentCallbacks.onMicLevel) currentCallbacks.onMicLevel(micRms);
 
       const pcm16 = downsampleTo16kPCM(input, captureCtx.sampleRate);
       const b64 = arrayBufferToBase64(pcm16.buffer);
-      ws.send(JSON.stringify({
-        realtimeInput: {
-          audio: {
-            mimeType: 'audio/pcm;rate=16000',
-            data: b64
+      const now = Date.now();
+
+      if (!isUserSpeaking) {
+        // Keep rolling pre-speech buffer so 1st syllable is never lost
+        preSpeechRing.push(b64);
+        if (preSpeechRing.length > PRE_SPEECH_CHUNKS) preSpeechRing.shift();
+
+        const startThreshold = isModelSpeaking ? SPEECH_START_BARGE_IN : SPEECH_START_IDLE;
+        if (micRms >= startThreshold) {
+          isUserSpeaking = true;
+          lastSpeechAt = now;
+          stopSilenceWatch();
+          if (isModelSpeaking) clearPlaybackQueue();
+
+          // Explicit manual VAD start + flush pre-speech buffer (works on Gemini 3.8 Live & 2.5!)
+          sendJson({ realtimeInput: { activityStart: {} } });
+          for (const bufferedChunk of preSpeechRing) {
+            sendAudioChunk(bufferedChunk);
           }
+          preSpeechRing = [];
+          if (currentCallbacks.onUserVoiceState) currentCallbacks.onUserVoiceState('speaking');
         }
-      }));
+      } else {
+        // Currently inside child's utterance: keep streaming PCM chunks
+        sendAudioChunk(b64);
+        if (micRms >= SPEECH_CONTINUE) {
+          lastSpeechAt = now;
+        } else if (now - lastSpeechAt >= CHILD_END_SILENCE_MS) {
+          isUserSpeaking = false;
+          sendJson({ realtimeInput: { activityEnd: {} } });
+          if (currentCallbacks.onUserVoiceState) currentCallbacks.onUserVoiceState('processing');
+        }
+      }
     };
 
     source.connect(processorNode);
-    // Connect through silent gain to keep ScriptProcessor active without feedback echo
     const zeroGain = captureCtx.createGain();
     zeroGain.gain.value = 0;
     processorNode.connect(zeroGain);
     zeroGain.connect(captureCtx.destination);
+  }
+
+  /**
+   * Discover available Live (bidiGenerateContent) models on the user's exact API key!
+   */
+  async function discoverLiveModels(apiKey) {
+    if (!apiKey) return { ok: false, error: 'API 키를 입력해 주세요.', liveModels: [] };
+    try {
+      const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models?key=${encodeURIComponent(apiKey)}`);
+      const data = await res.json();
+      if (!res.ok) {
+        return { ok: false, error: data?.error?.message || `HTTP ${res.status}`, liveModels: [] };
+      }
+      const models = (data.models || [])
+        .filter((m) => Array.isArray(m.supportedGenerationMethods) && m.supportedGenerationMethods.includes('bidiGenerateContent'))
+        .map((m) => (m.name || '').replace(/^models\//, ''));
+      return { ok: true, liveModels: models };
+    } catch (err) {
+      return { ok: false, error: err.message || '네트워크 오류', liveModels: [] };
+    }
+  }
+
+  /**
+   * 1-Click End-to-End Live Connection Diagnostic Test (WebSocket setup + real audio reply check!)
+   */
+  async function testConnection({ apiKey, preferredModel = 'gemini-3.8-live' }) {
+    const key = (apiKey || '').trim();
+    if (!key) return { ok: false, step: 'key', message: 'Gemini API 키를 먼저 입력해 주세요.' };
+
+    // Step 1: Verify API key & discover supported bidiGenerateContent models
+    const disc = await discoverLiveModels(key);
+    if (!disc.ok) {
+      return { ok: false, step: 'key', message: `API 키 확인 실패: ${disc.error}` };
+    }
+
+    // Pick best candidate model order: preferred -> gemini-3.8-live -> first discovered live model -> 2.5 preview
+    const candidates = [];
+    const addUnique = (m) => { if (m && !candidates.includes(m)) candidates.push(m); };
+    if (disc.liveModels.includes(preferredModel)) addUnique(preferredModel);
+    if (disc.liveModels.includes('gemini-3.8-live')) addUnique('gemini-3.8-live');
+    disc.liveModels.forEach((m) => { if (/live|native-audio/i.test(m)) addUnique(m); });
+    addUnique(preferredModel);
+    addUnique('gemini-2.5-flash-native-audio-preview-12-2025');
+
+    let lastFailReason = '';
+    for (const modelId of candidates.slice(0, 3)) {
+      const probe = await probeLiveModel(key, modelId);
+      if (probe.ok) {
+        return {
+          ok: true,
+          workingModel: modelId,
+          availableLiveModels: disc.liveModels,
+          audioBytes: probe.audioBytes,
+          transcript: probe.transcript,
+          message: `✅ 실시간 음성 연결 성공! (모델: ${modelId}, 오디오 ${Math.round(probe.audioBytes / 1024)}KB 수신)`
+        };
+      }
+      lastFailReason = `${modelId}: ${probe.reason}`;
+    }
+
+    return {
+      ok: false,
+      step: 'websocket',
+      availableLiveModels: disc.liveModels,
+      message: `WebSocket 연결 실패 (${lastFailReason})`
+    };
+  }
+
+  function probeLiveModel(apiKey, modelId) {
+    return new Promise((resolve) => {
+      let settled = false;
+      let audioBytes = 0;
+      let transcript = '';
+      let gotSetup = false;
+      let testWs = null;
+
+      const finish = (res) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        if (testWs) { try { testWs.close(); } catch (_) {} }
+        resolve(res);
+      };
+
+      const timer = setTimeout(() => {
+        finish({ ok: false, reason: gotSetup ? '응답 시간 초과 (10초)' : 'setupComplete 시간 초과' });
+      }, 10000);
+
+      try {
+        testWs = new WebSocket(`${WS_BASE}?key=${encodeURIComponent(apiKey)}`);
+      } catch (err) {
+        finish({ ok: false, reason: err.message });
+        return;
+      }
+
+      testWs.onopen = () => {
+        testWs.send(JSON.stringify({
+          setup: {
+            model: `models/${modelId}`,
+            generationConfig: {
+              responseModalities: ['AUDIO'],
+              speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: 'Puck' } } }
+            },
+            outputAudioTranscription: {},
+            realtimeInputConfig: { automaticActivityDetection: { disabled: true } }
+          }
+        }));
+      };
+
+      testWs.onmessage = async (event) => {
+        let raw = event.data;
+        if (raw instanceof Blob) raw = await raw.text();
+        let msg;
+        try { msg = JSON.parse(raw); } catch (_) { return; }
+
+        if (msg.setupComplete) {
+          gotSetup = true;
+          testWs.send(JSON.stringify({
+            clientContent: {
+              turns: [{ role: 'user', parts: [{ text: 'Say "Hi friend!" in 2 words.' }] }],
+              turnComplete: true
+            }
+          }));
+          return;
+        }
+        const sc = msg.serverContent;
+        if (!sc) return;
+        if (sc.modelTurn?.parts) {
+          for (const p of sc.modelTurn.parts) {
+            if (p.inlineData?.data && /audio\/pcm/i.test(p.inlineData.mimeType || '')) {
+              audioBytes += Math.floor((p.inlineData.data.length * 3) / 4);
+            }
+          }
+        }
+        if (sc.outputTranscription?.text) transcript += sc.outputTranscription.text;
+        if (sc.turnComplete || audioBytes > 4000) {
+          finish({ ok: audioBytes > 0, audioBytes, transcript: transcript.trim(), reason: audioBytes > 0 ? '' : '오디오 데이터 없음' });
+        }
+      };
+
+      testWs.onerror = () => finish({ ok: false, reason: 'WebSocket 오류' });
+      testWs.onclose = (ev) => {
+        finish({ ok: false, reason: `code=${ev.code}${ev.reason ? ' ' + ev.reason : ''}` });
+      };
+    });
   }
 
   async function connect({
@@ -253,6 +448,7 @@ window.TFGeminiLive = (function () {
     onTurnComplete,
     onSpeakingState,
     onMicLevel,
+    onUserVoiceState,
     onSilenceTick,
     onSilenceNudge
   }) {
@@ -268,6 +464,7 @@ window.TFGeminiLive = (function () {
       onTurnComplete,
       onSpeakingState,
       onMicLevel,
+      onUserVoiceState,
       onSilenceTick,
       onSilenceNudge
     };
@@ -287,11 +484,10 @@ window.TFGeminiLive = (function () {
       },
       inputAudioTranscription: {},
       outputAudioTranscription: {},
+      // Manual client-side RMS VAD with 425ms pre-speech buffer (fixes Gemini 3.8 Live silent audio bug!)
       realtimeInputConfig: {
         automaticActivityDetection: {
-          disabled: false,
-          prefixPaddingMs: 300,
-          silenceDurationMs: 1600
+          disabled: true
         }
       }
     };
@@ -320,20 +516,30 @@ window.TFGeminiLive = (function () {
       return false;
     }
 
-    // Prepare 24kHz playback AudioContext + AnalyserNode right inside user gesture
+    // Prepare playback AudioContext + AnalyserNode right inside user click gesture
     const AudioCtx = window.AudioContext || window.webkitAudioContext;
-    playbackCtx = new AudioCtx({ sampleRate: 24000 });
+    try {
+      playbackCtx = new AudioCtx({ sampleRate: 24000 });
+    } catch (_) {
+      playbackCtx = new AudioCtx();
+    }
+    if (playbackCtx.state === 'suspended') {
+      playbackCtx.resume().catch(() => {});
+    }
     analyserNode = playbackCtx.createAnalyser();
     analyserNode.fftSize = 256;
     analyserNode.connect(playbackCtx.destination);
     nextPlayTime = playbackCtx.currentTime;
 
     return new Promise((resolve) => {
+      let resolved = false;
+      const done = (val) => { if (!resolved) { resolved = true; resolve(val); } };
+
       try {
         ws = new WebSocket(wsUrl);
       } catch (err) {
         if (onError) onError(`WebSocket 연결 실패: ${err.message}`);
-        resolve(false);
+        done(false);
         return;
       }
 
@@ -359,21 +565,21 @@ window.TFGeminiLive = (function () {
           startLipSyncLoop();
           try {
             await startMicCapture();
-          } catch (micErr) {
-            if (onError) onError('마이크 권한을 허용해 주세요! (텍스트 입력은 계속 가능해요)');
+          } catch (_) {
+            if (onError) onError('마이크 권한을 허용해 주세요! (텍스트·선택 버튼은 계속 가능해요)');
           }
           if (onConnected) onConnected();
           if (openingPrompt) {
             sendText(openingPrompt);
           }
-          resolve(true);
+          done(true);
           return;
         }
 
         const sc = msg.serverContent;
         if (!sc) return;
 
-        // 2. Barge-in interruption -> immediately stop AI audio and listen!
+        // 2. Barge-in interruption -> immediately stop AI audio
         if (sc.interrupted) {
           clearPlaybackQueue();
           stopSilenceWatch();
@@ -414,16 +620,20 @@ window.TFGeminiLive = (function () {
       };
 
       ws.onerror = () => {
-        if (onError) onError('Gemini Live 연결 중 오류가 발생했습니다. API 키와 모델명을 확인해 주세요.');
-        resolve(false);
+        if (!connected && onError) {
+          onError('Gemini Live WebSocket 연결 오류가 발생했습니다.');
+        }
       };
 
       ws.onclose = (ev) => {
         const wasConnected = connected;
         cleanupAudioAndTimers();
         connected = false;
+        if (!wasConnected && onError) {
+          onError(`Gemini Live 연결 종료 (code=${ev.code}${ev.reason ? ': ' + ev.reason : ''})`);
+        }
         if (onDisconnected) onDisconnected(ev.code, ev.reason || '');
-        if (!wasConnected) resolve(false);
+        done(false);
       };
     });
   }
@@ -431,17 +641,22 @@ window.TFGeminiLive = (function () {
   function sendText(text) {
     if (!ws || ws.readyState !== WebSocket.OPEN || !text) return false;
     stopSilenceWatch();
-    ws.send(JSON.stringify({
+    if (isUserSpeaking) {
+      isUserSpeaking = false;
+      sendJson({ realtimeInput: { activityEnd: {} } });
+    }
+    return sendJson({
       clientContent: {
         turns: [{ role: 'user', parts: [{ text }] }],
         turnComplete: true
       }
-    }));
-    return true;
+    });
   }
 
   function cleanupAudioAndTimers() {
     stopSilenceWatch();
+    isUserSpeaking = false;
+    preSpeechRing = [];
     if (lipSyncRaf) { cancelAnimationFrame(lipSyncRaf); lipSyncRaf = null; }
     clearPlaybackQueue();
     if (processorNode) { try { processorNode.disconnect(); } catch (_) {} processorNode = null; }
@@ -466,6 +681,8 @@ window.TFGeminiLive = (function () {
     connect,
     disconnect,
     sendText,
+    discoverLiveModels,
+    testConnection,
     isConnected: () => connected,
     isSpeaking: () => isModelSpeaking
   };
