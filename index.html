@@ -1,0 +1,523 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+  <title>TalkieFriends — 블루이·빙고 영어놀이</title>
+  <meta name="description" content="6~7세 아이도 혼자 캐릭터와 장소를 고르고 블루이·빙고와 영어로 역할놀이와 자유 토킹을 주고받는 동화책 영어 앱" />
+  <meta name="theme-color" content="#499AF5" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="default" />
+  <meta name="apple-mobile-web-app-title" content="TalkieFriends" />
+  <link rel="manifest" href="./manifest.json" />
+  <link rel="icon" type="image/png" sizes="192x192" href="./assets/icons/icon-192.png" />
+  <link rel="apple-touch-icon" href="./assets/icons/apple-touch-icon.png" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Jua&family=Nunito:wght@700;800;900&family=Noto+Sans+KR:wght@500;700;800&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="./styles.css" />
+</head>
+<body>
+  <div class="kid-app">
+    <!-- ==================== 1. FULL-BLEED STORYBOOK STAGE ==================== -->
+    <main class="theater-stage" id="live-stage-viewport">
+      <!-- Pure Nano Banana Background Layer -->
+      <img class="stage-bg" id="live-stage-bg-img" src="./assets/backgrounds/snack_shop.webp" alt="놀이 배경" />
+      <div class="stage-sun-vignette"></div>
+
+      <!-- Floating Top Kid Toolbar (Only big friendly visual buttons!) -->
+      <header class="kid-topbar">
+        <div class="kid-top-left">
+          <button class="kid-pill-btn char-pill" id="open-char-tray-btn" title="친구 바꾸기·꾸미기">
+            <span class="mini-avatar-circle" id="topbar-char-rig"></span>
+            <span class="pill-stack">
+              <strong id="topbar-char-name">블루이</strong>
+              <small id="topbar-char-mood">🎉 장난꾸러기</small>
+            </span>
+          </button>
+
+          <button class="kid-pill-btn place-pill" id="open-place-tray-btn" title="놀이 방식 · 장소 바꾸기">
+            <img class="mini-place-thumb" id="topbar-bg-thumb" src="./assets/backgrounds/snack_shop.webp" alt="장소" />
+            <span class="pill-stack">
+              <strong id="topbar-place-name">🍜 라면 가게</strong>
+              <small id="topbar-place-sub">역할극 · 자유토킹</small>
+            </span>
+          </button>
+        </div>
+
+        <div class="kid-top-right">
+          <div class="star-pill" title="모은 별">⭐ <strong id="session-stars">0</strong></div>
+          <button class="kid-icon-pill" id="open-dressup-btn" title="친구 꾸미기·성격 바꾸기">✨ 꾸미기</button>
+          <button class="kid-icon-pill" id="open-prep-quick-btn" title="Live 시작 전 그림방">🎨 그림방</button>
+          <button class="parent-lock-pill" id="open-parent-hub-btn" title="부모님 리포트 · 기기연동 · Gemini Live">
+            🔒 엄마·아빠
+            <span class="parent-dot" id="weak-count-badge">3</span>
+          </button>
+        </div>
+      </header>
+
+      <!-- Subtle Curriculum Stars (3 clean little icons, zero clutter) -->
+      <div class="mini-progress-dots" aria-label="오늘 놀이 별">
+        <span class="prog-dot" id="mission-calendar" title="요일·달력">📅</span>
+        <span class="prog-dot" id="mission-daily" title="숫자·날씨·감정">🔢</span>
+        <span class="prog-dot" id="mission-manners" title="인사·매너">💛</span>
+      </div>
+
+      <!-- Floating Speech Bubble right on the storybook stage -->
+      <div class="stage-speech-wrap">
+        <div class="storybook-bubble" id="storybook-bubble">
+          <div class="bubble-top-row">
+            <div class="speaker-head-wrap">
+              <span class="speaker-tag" id="bubble-speaker">🐾 Bluey (블루이)</span>
+              <span class="voice-mode-badge" id="voice-mode-badge">🎙️ 기본 음성</span>
+            </div>
+            <div class="bubble-sound-btns">
+              <button class="round-sound-btn" id="replay-tts-btn" title="다시 듣기">🔊</button>
+              <button class="round-sound-btn" id="slow-tts-btn" title="천천히 듣기">🐢</button>
+            </div>
+          </div>
+          <p class="bubble-en" id="bubble-english"></p>
+          <p class="bubble-kr" id="bubble-korean-hint"></p>
+
+          <!-- Repeat-After-Me Echo Card (Appears only during gentle correction / Korean switch) -->
+          <div class="kid-echo-box hidden" id="echo-card">
+            <div class="kid-echo-label">✨ 같이 따라 해 볼까?</div>
+            <div class="kid-echo-text" id="echo-sentence"></div>
+            <div class="kid-echo-actions">
+              <button class="chunky-btn soft-blue" id="echo-listen-btn">🔊 천천히 듣기</button>
+              <button class="chunky-btn soft-green" id="echo-say-btn">🗣️ 이렇게 말했어요!</button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Celebration Particles -->
+      <div class="particle-layer" id="particle-layer" aria-hidden="true"></div>
+
+      <!-- BIG TAPPABLE ANIMATED CHARACTER (Nano Banana Articulated Rig!) -->
+      <button class="stage-character-btn" id="stage-character-btn" title="친구를 눌러서 인사해 봐요!">
+        <div class="stage-puppet-anchor" id="live-puppet-container"></div>
+      </button>
+
+      <!-- Gentle 4.5s Silence Wait Bar (Appears right along bottom of stage when waiting) -->
+      <div class="silence-hud hidden" id="silence-hud">
+        <span id="silence-status-text">⏳ 천천히 생각해도 괜찮아요...</span>
+        <div class="silence-track"><div class="silence-fill" id="silence-progress-fill"></div></div>
+      </div>
+
+      <!-- ==================== BOTTOM KID CONTROL DOCK ==================== -->
+      <div class="kid-bottom-dock">
+        <!-- Giant Visual Choice Bubbles for Kids -->
+        <div class="kid-choices-row" id="choice-chips"></div>
+
+        <!-- Giant Center Play / Mic Button + Minimal Helpers -->
+        <div class="kid-main-actions">
+          <button class="kid-side-btn" id="toggle-type-btn" title="글자로 말하기">⌨️ 글자</button>
+
+          <button class="giant-play-btn" id="giant-action-btn">
+            <span class="giant-icon" id="giant-action-icon">▶️</span>
+            <span class="giant-label" id="giant-action-label">블루이랑 놀자!</span>
+          </button>
+
+          <button class="kid-side-btn" id="finish-play-btn" title="놀이 끝내고 부모님 리포트 보기">📋 끝내기</button>
+        </div>
+
+        <!-- Collapsible Simple Text Input (Hidden by default so kids see zero clutter!) -->
+        <form class="kid-type-bar hidden" id="live-text-form">
+          <input
+            type="text"
+            id="live-text-input"
+            placeholder='직접 입력 (예: Let&#39;s have a ramen. / 사과 주세요 / "." 입력 시 리포트)'
+            autocomplete="off"
+          />
+          <button type="submit" class="chunky-btn blue">말하기</button>
+        </form>
+      </div>
+    </main>
+  </div>
+
+  <!-- ==================== SHEET 1: KID CHARACTER PICKER (친구 바꾸기) ==================== -->
+  <div class="sheet-backdrop hidden" id="char-tray-sheet" role="dialog" aria-modal="true">
+    <div class="kid-sheet">
+      <div class="sheet-handle"></div>
+      <div class="sheet-head">
+        <h2>🐾 누구랑 영어로 놀까?</h2>
+        <button class="close-circle-btn" data-close="char-tray-sheet">✕</button>
+      </div>
+      <div class="kid-char-grid" id="kid-char-grid"></div>
+      <div class="sheet-bottom-row">
+        <button class="chunky-btn warm" id="quick-add-photo-char-btn">📸 내 캐릭터 사진 붙이기</button>
+        <button class="chunky-btn blue" id="open-dressup-from-tray">✨ 지금 친구 꾸미기</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ==================== SHEET 2: KID PLACE & ROLEPLAY PICKER (장소·자유토킹 바꾸기) ==================== -->
+  <div class="sheet-backdrop hidden" id="place-tray-sheet" role="dialog" aria-modal="true">
+    <div class="kid-sheet">
+      <div class="sheet-handle"></div>
+      <div class="sheet-head">
+        <h2>🏞️ 자유 토킹할까, 역할놀이 할까?</h2>
+        <button class="close-circle-btn" data-close="place-tray-sheet">✕</button>
+      </div>
+
+      <!-- Featured Open Free Talk Card (No script, talk about anything!) -->
+      <button type="button" class="free-talk-hero-card" id="select-free-talk-btn">
+        <div class="ft-hero-icon">💬</div>
+        <div class="ft-hero-text">
+          <strong>🌈 자유 토킹 모드 (롤플레이 없이 아무 얘기나!)</strong>
+          <span>공룡, 유치원, 간식, 가족, 만화 이야기까지 아이가 꺼낸 주제로 진짜 친구처럼 영어로 수다 떨어요!</span>
+        </div>
+        <span class="ft-hero-pill" id="free-talk-active-pill">선택하기</span>
+      </button>
+
+      <div class="place-mode-toggle">
+        <label class="friendly-switch">
+          <input type="checkbox" id="bg-only-switch" />
+          <span>🖼️ 대화 방식(자유토킹/역할극)은 그대로 두고 <strong>배경 그림만</strong> 바꾸기</span>
+        </label>
+        <label class="chunky-btn soft-blue upload-btn">
+          📸 내 사진 배경
+          <input type="file" id="custom-bg-upload" accept="image/*" class="sr-only" />
+        </label>
+      </div>
+      <div class="kid-place-grid" id="kid-place-grid"></div>
+    </div>
+  </div>
+
+  <!-- ==================== SHEET 3: KID-FRIENDLY DRESS-UP & MOOD STUDIO (친구 꾸미기!) ==================== -->
+  <div class="sheet-backdrop hidden" id="dressup-sheet" role="dialog" aria-modal="true">
+    <div class="kid-sheet large-sheet">
+      <div class="sheet-handle"></div>
+      <div class="sheet-head">
+        <h2>✨ 내 친구 꾸미기 &amp; 성격 고르기</h2>
+        <button class="close-circle-btn" data-close="dressup-sheet">✕</button>
+      </div>
+
+      <div class="dressup-layout">
+        <!-- Live Preview Stage -->
+        <div class="dressup-preview-box">
+          <img class="dressup-bg" id="studio-preview-bg" src="./assets/backgrounds/snack_shop.webp" alt="미리보기 배경" />
+          <div class="dressup-puppet" id="studio-puppet-container"></div>
+          <div class="dressup-motion-bar">
+            <button type="button" class="mini-pill-btn motion-test-btn active" data-motion="idle">😊 기본</button>
+            <button type="button" class="mini-pill-btn motion-test-btn" data-motion="wave">👋 인사</button>
+            <button type="button" class="mini-pill-btn motion-test-btn" data-motion="speaking">🗣️ 말하기</button>
+            <button type="button" class="mini-pill-btn motion-test-btn" data-motion="celebrate">🎉 만세</button>
+            <button type="button" class="mini-pill-btn motion-test-btn" data-motion="salute">🫡 경례</button>
+          </div>
+        </div>
+
+        <!-- Simple Big Visual Tabs for Kids! -->
+        <div class="dressup-controls">
+          <div class="dressup-tab-bar">
+            <button type="button" class="dtab active" data-dtab="mood">🎭 성격</button>
+            <button type="button" class="dtab" data-dtab="parts">🧩 파츠·모자</button>
+            <button type="button" class="dtab" data-dtab="photo">📸 내 사진</button>
+          </div>
+
+          <!-- DTab 1: 5 Big Visual Personality Cards (Tap & Immediately Hear!) -->
+          <div class="dtab-panel active" id="dtab-mood">
+            <p class="kid-guide">성격을 누르면 말하는 방식과 움직임이 바로 달라져요!</p>
+            <div class="mood-card-grid" id="mood-card-grid"></div>
+            <div class="simple-name-row">
+              <label>이름 바꾸기 <input type="text" id="quick-name-kr" placeholder="예: 블루이" /></label>
+              <label>영어 이름 <input type="text" id="quick-name-en" placeholder="예: Bluey" /></label>
+              <button type="button" class="chunky-btn soft-blue" id="test-voice-quick-btn">🔊 목소리 듣기</button>
+            </div>
+          </div>
+
+          <!-- DTab 2: Giant Visual Parts Mix & Match (No Dropdowns!) -->
+          <div class="dtab-panel" id="dtab-parts">
+            <div class="part-cat-bar">
+              <button type="button" class="pcat active" data-pcat="accessory">👑 모자·장식</button>
+              <button type="button" class="pcat" data-pcat="headPreset">🧠 머리</button>
+              <button type="button" class="pcat" data-pcat="bodyPreset">👕 몸통</button>
+              <button type="button" class="pcat" data-pcat="handsPreset">✋ 양손</button>
+              <button type="button" class="pcat" data-pcat="tailPreset">🐾 꼬리</button>
+            </div>
+            <div class="visual-parts-grid" id="visual-parts-grid"></div>
+          </div>
+
+          <!-- DTab 3: Super-Simple Bring Your Own Character Photo! -->
+          <div class="dtab-panel" id="dtab-photo">
+            <div class="simple-photo-card">
+              <h3>📸 아이가 좋아하는 캐릭터 사진 1장 붙이기</h3>
+              <p class="kid-guide">사진을 고르면 흰 배경은 자동으로 지우고, 머리랑 몸통이 따로 움직이게 만들어 줘요!</p>
+              <div class="photo-big-btns">
+                <label class="chunky-btn warm upload-btn">
+                  📸 새 친구로 사진 붙이기
+                  <input type="file" id="byoc-new-single-upload" accept="image/*" class="sr-only" />
+                </label>
+                <label class="chunky-btn soft-blue upload-btn">
+                  🔄 지금 친구에 사진 덮어쓰기
+                  <input type="file" id="byoc-single-upload" accept="image/*" class="sr-only" />
+                </label>
+              </div>
+              <div class="photo-split-row">
+                <label>목 나누는 선: <strong id="split-ratio-val">48%</strong>
+                  <input type="range" id="byoc-split-ratio" min="34" max="64" value="48" />
+                </label>
+                <label class="inline-check"><input type="checkbox" id="byoc-remove-white" checked /> ✨ 흰 배경 지우기</label>
+              </div>
+            </div>
+
+            <!-- Collapsible Advanced Per-Part Modeling for Parents -->
+            <details class="advanced-rig-details">
+              <summary>🦴 전문가·부모님용: 머리·손·몸통·꼬리 파츠별 개별 붙이기 &amp; 전개도</summary>
+              <div class="adv-rig-inner">
+                <div class="adv-top-btns">
+                  <button type="button" class="mini-pill-btn" id="toggle-exploded-btn">🦴 파츠 분리 전개도 (OFF)</button>
+                  <button type="button" class="mini-pill-btn" id="clear-all-custom-parts-btn">↺ 기본 파츠 복원</button>
+                  <button type="button" class="mini-pill-btn hidden" id="delete-char-btn">🗑️ 이 커스텀 친구 삭제</button>
+                </div>
+                <div class="mini-part-slots">
+                  <label class="slot-btn">🧠 머리(기본)<input type="file" class="part-file-input sr-only" data-part="head" accept="image/*" /></label>
+                  <label class="slot-btn">🗣️ 머리(입열림)<input type="file" class="part-file-input sr-only" data-part="headTalk" accept="image/*" /></label>
+                  <label class="slot-btn">👕 몸통<input type="file" class="part-file-input sr-only" data-part="body" accept="image/*" /></label>
+                  <label class="slot-btn">🤚 왼손<input type="file" class="part-file-input sr-only" data-part="leftHand" accept="image/*" /></label>
+                  <label class="slot-btn">✋ 오른손<input type="file" class="part-file-input sr-only" data-part="rightHand" accept="image/*" /></label>
+                  <label class="slot-btn">🐾 꼬리<input type="file" class="part-file-input sr-only" data-part="backProp" accept="image/*" /></label>
+                </div>
+              </div>
+            </details>
+          </div>
+        </div>
+      </div>
+
+      <div class="sheet-bottom-row">
+        <button class="chunky-btn green" id="done-dressup-btn">✅ 다 꾸몄어요! 놀러 가기</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ==================== SHEET 4: PRE-LIVE PICTURE ROOM (그림방 — 규칙 0) ==================== -->
+  <div class="sheet-backdrop hidden" id="prep-sheet" role="dialog" aria-modal="true">
+    <div class="kid-sheet large-sheet">
+      <div class="sheet-handle"></div>
+      <div class="sheet-head">
+        <h2>🎨 Live 전 그림방 &amp; 부모님 AI 비서</h2>
+        <button class="close-circle-btn" data-close="prep-sheet">✕</button>
+      </div>
+      <p class="kid-guide">규칙 0 준수: Live를 켜기 전 이곳에서만 <strong>"그림 그려줘"</strong> 요청 시 동화 배경 카드를 <strong>1장씩</strong> 보여드려요.</p>
+
+      <div class="prep-chips">
+        <button class="mini-pill-btn prep-quick-btn" data-prep="그림 그려줘">🎨 "그림 그려줘" (1장)</button>
+        <button class="mini-pill-btn prep-quick-btn" data-prep="오늘 역할극 커리큘럼 알려줘">🎭 오늘 커리큘럼</button>
+        <button class="mini-pill-btn prep-quick-btn" data-prep="요약해줘">📋 "요약해줘"</button>
+      </div>
+
+      <div class="prep-chat-feed" id="prep-chat-feed"></div>
+
+      <form class="kid-type-bar" id="prep-chat-form">
+        <input type="text" id="prep-chat-input" placeholder='예: "그림 그려줘", "오늘 뭐 배워?", "." 입력 시 리포트' autocomplete="off" />
+        <button type="submit" class="chunky-btn blue">보내기</button>
+      </form>
+    </div>
+  </div>
+
+  <!-- ==================== SHEET 5: PARENT HUB (엄마·아빠 전용 — 리포트·기기연동·Gemini Live) ==================== -->
+  <div class="sheet-backdrop hidden" id="parent-sheet" role="dialog" aria-modal="true">
+    <div class="kid-sheet large-sheet">
+      <div class="sheet-handle"></div>
+      <div class="sheet-head">
+        <div>
+          <h2>🔒 엄마·아빠 공간 (리포트 · 기기연동 · Gemini Live)</h2>
+          <small class="muted-note">🔇 리포트 화면은 절대 음성으로 낭독하지 않습니다 (규칙 5)</small>
+        </div>
+        <button class="close-circle-btn" data-close="parent-sheet">✕</button>
+      </div>
+
+      <div class="parent-tab-bar">
+        <button type="button" class="ptab active" data-ptab="report">📋 수업 리포트</button>
+        <button type="button" class="ptab" data-ptab="sync">☁️ 기기연동·앱설치</button>
+        <button type="button" class="ptab" data-ptab="weak">🔁 취약 복습장</button>
+        <button type="button" class="ptab" data-ptab="compare">⚡ 성향 비교</button>
+        <button type="button" class="ptab" data-ptab="settings">🎙️ Gemini Live·설정</button>
+      </div>
+
+      <!-- Parent Tab 1: 5-Section Report + Past History -->
+      <div class="ptab-panel active" id="ptab-report">
+        <div class="parent-action-row">
+          <button class="mini-pill-btn" id="refresh-report-btn">🔄 최신 대화로 갱신</button>
+          <button class="chunky-btn blue" id="copy-report-btn">📋 카톡/메모용 복사</button>
+        </div>
+        <div id="parent-report-content" class="report-scroll"></div>
+        <details class="advanced-rig-details history-details">
+          <summary>📅 지난 수업 기록 모아보기 (기기 연동 시 자동 동기화)</summary>
+          <div id="report-history-list" class="history-scroll"></div>
+        </details>
+      </div>
+
+      <!-- Parent Tab 2: Cross-Device Family Sync & PWA App Download/Install -->
+      <div class="ptab-panel" id="ptab-sync">
+        <div class="sync-scroll">
+          <!-- PWA Install Card -->
+          <div class="sync-card install-card">
+            <div class="sync-card-head">
+              <h3>📲 앱처럼 다운로드 · 설치하기 (PWA)</h3>
+              <span class="status-chip ready" id="pwa-status-chip">설치 지원</span>
+            </div>
+            <p class="kid-guide">바탕화면·태블릿 홈 화면에 블루이 아이콘 앱으로 설치해 브라우저 주소창 없이 전체화면으로 실행할 수 있어요.</p>
+            <div class="parent-action-row" style="margin-bottom:0;">
+              <button type="button" class="chunky-btn blue" id="pwa-install-btn">📲 앱으로 설치하기</button>
+            </div>
+            <p class="tiny-guide">• PC 크롬/엣지·안드로이드: 위 버튼 클릭 (또는 주소창 오른쪽 설치 아이콘)<br />• 아이패드·아이폰 Safari: 하단 <strong>공유(⬆️) → 홈 화면에 추가</strong></p>
+          </div>
+
+          <!-- Family Sync Code Card -->
+          <div class="sync-card">
+            <div class="sync-card-head">
+              <h3>☁️ 다른 컴퓨터에서도 내 데이터 그대로 이어쓰기</h3>
+              <span class="status-chip" id="sync-server-badge">서버 확인 중...</span>
+            </div>
+            <p class="kid-guide">우리 가족 코드만 입력하면 집 PC, 노트북, 태블릿 어디서나 내 캐릭터 사진·취약 복습장·지난 리포트가 자동으로 이어집니다.</p>
+            <div class="sync-form-grid">
+              <label class="setting-field">
+                <span>🔑 가족 동기화 코드 (예: BLUEY-2026)</span>
+                <div class="inline-input-btn">
+                  <input type="text" id="sync-family-code" placeholder="예: BLUEY-2026" maxlength="32" />
+                  <button type="button" class="mini-pill-btn" id="generate-family-code-btn">🎲 코드 생성</button>
+                </div>
+              </label>
+              <label class="setting-field">
+                <span>🔒 가족 비밀번호 PIN (선택 4~8자리)</span>
+                <input type="password" id="sync-family-pin" placeholder="비워두면 PIN 없이 사용" maxlength="16" />
+              </label>
+            </div>
+            <details class="advanced-rig-details">
+              <summary>🌐 (선택) 외부 배포 동기화 서버 주소 직접 지정</summary>
+              <div style="margin-top:8px;">
+                <label class="setting-field">
+                  <span>동기화 서버 URL (Render/Railway 배포 주소, 비워두면 현재 서버 자동 사용)</span>
+                  <input type="url" id="sync-server-url" placeholder="https://my-talkiefriends.onrender.com" />
+                </label>
+              </div>
+            </details>
+            <div class="parent-action-row" style="margin-bottom:0;">
+              <button type="button" class="chunky-btn soft-blue" id="sync-pull-btn">⬇️ 다른 기기에서 불러오기</button>
+              <button type="button" class="chunky-btn green" id="sync-push-btn">⬆️ 지금 클라우드에 저장</button>
+            </div>
+            <div class="sync-status-line" id="sync-status-text">가족 코드를 입력하고 저장하면 변경 시 자동 동기화됩니다.</div>
+          </div>
+
+          <!-- Offline File Backup/Restore -->
+          <div class="sync-card">
+            <div class="sync-card-head">
+              <h3>💾 오프라인 파일 백업 · 복원 (서버 없이도 이동)</h3>
+            </div>
+            <p class="kid-guide">서버 없이도 카톡·이메일·USB로 <code>.tfbackup.json</code> 파일 1개만 옮기면 다른 컴퓨터에 내 설정·사진·복습장을 100% 복원해요.</p>
+            <div class="parent-action-row" style="margin-bottom:0;">
+              <button type="button" class="chunky-btn warm" id="export-backup-btn">📤 내 데이터 파일로 저장</button>
+              <label class="chunky-btn soft-blue upload-btn">
+                📥 백업 파일 불러오기
+                <input type="file" id="import-backup-input" accept=".json,.tfbackup.json" class="sr-only" />
+              </label>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Parent Tab 3: Weak Expressions Vault & Curriculum -->
+      <div class="ptab-panel" id="ptab-weak">
+        <form class="weak-inline-form" id="add-weak-form">
+          <input type="text" id="new-weak-wrong" placeholder="틀린 말 (예: a water)" required />
+          <input type="text" id="new-weak-right" placeholder="교정 표현 (예: some water)" required />
+          <button type="submit" class="chunky-btn blue">+ 추가</button>
+        </form>
+        <div id="weak-vault-list" class="weak-scroll"></div>
+        <div class="curr-box">
+          <strong>🌈 오늘 6~7세 커리큘럼 균형</strong>
+          <div id="curriculum-bars"></div>
+        </div>
+      </div>
+
+      <!-- Parent Tab 4: Personality Reaction Comparison -->
+      <div class="ptab-panel" id="ptab-compare">
+        <p class="kid-guide">아이가 <code>"Let's have a ramen."</code>이라고 틀리게 말했을 때 각 캐릭터가 성향에 따라 어떻게 다르게 대답하는지 들어보세요!</p>
+        <div id="personality-comparison-grid" class="compare-scroll"></div>
+      </div>
+
+      <!-- Parent Tab 5: Real Gemini Live Voice, API & Rule Test Simulator -->
+      <div class="ptab-panel" id="ptab-settings">
+        <div class="settings-stack settings-scroll">
+          <!-- Gemini Live Real-time Bidirectional Audio Card -->
+          <div class="sync-card live-config-card">
+            <div class="sync-card-head">
+              <h3>⚡ 제미나이 라이브 (Gemini Live) 실시간 양방향 음성</h3>
+              <span class="status-chip" id="gemini-live-status">API 키 미설정</span>
+            </div>
+            <p class="kid-guide">버튼을 매번 누르지 않고 진짜 제미나이 라이브처럼 아이 목소리를 실시간으로 듣고 즉각 원어민 목소리로 반응하며, 오디오 파형에 맞춰 캐릭터 입이 움직입니다.</p>
+            <label class="setting-toggle">
+              <span>🔴 Gemini Live 실시간 양방향 음성 모드 우선 사용</span>
+              <input type="checkbox" id="setting-use-gemini-live" checked />
+            </label>
+            <label class="setting-field">
+              <span>🤖 Gemini API Key (서버 환경변수 설정 시 비워도 자동 연결!)</span>
+              <input type="password" id="setting-api-key" placeholder="AIza... (비워두면 내장 자유대화·역할극 엔진 작동)" />
+            </label>
+            <label class="setting-field">
+              <span>🧠 Gemini Live 모델</span>
+              <select id="setting-live-model">
+                <option value="gemini-2.5-flash-native-audio-preview-09-2025">gemini-2.5-flash-native-audio-preview-09-2025 (권장 안정형)</option>
+                <option value="gemini-2.5-flash-native-audio-latest">gemini-2.5-flash-native-audio-latest (최신 네이티브 오디오)</option>
+              </select>
+            </label>
+            <label class="setting-toggle">
+              <span>🔑 가족 코드 동기화 시 API 키도 함께 포함 (내 기기 전용일 때만)</span>
+              <input type="checkbox" id="setting-sync-api-key" />
+            </label>
+          </div>
+
+          <label class="setting-field">
+            <span>🇺🇸 기본 모드 미국식 영어 음성 (en-US)</span>
+            <select id="voice-select"></select>
+          </label>
+          <label class="setting-toggle">
+            <span>⏳ 4.5초 침묵 시 성향별 자동 힌트 제공 (규칙 1)</span>
+            <input type="checkbox" id="setting-auto-hint" checked />
+          </label>
+          <label class="setting-toggle">
+            <span>🔊 기본 Live 모드 미국식 음성 자동 읽기</span>
+            <input type="checkbox" id="setting-auto-tts" checked />
+          </label>
+          <label class="setting-toggle">
+            <span>🇰🇷 말풍선 아래 한국어 부모 가이드 표시</span>
+            <input type="checkbox" id="setting-show-kr" checked />
+          </label>
+
+          <div class="sim-parent-box">
+            <strong>🧪 부모님용 빠른 규칙·자유대화 체험 (누르면 무대에서 바로 시연!)</strong>
+            <div class="sim-parent-grid">
+              <button type="button" class="mini-pill-btn sim-chip" data-sim="freetalk">🦖 자유 토킹(공룡 얘기)</button>
+              <button type="button" class="mini-pill-btn sim-chip" data-sim="error">🍜 틀린 영어 교정</button>
+              <button type="button" class="mini-pill-btn sim-chip" data-sim="korean">🇰🇷 한국어→영어 전환</button>
+              <button type="button" class="mini-pill-btn sim-chip" data-sim="accent">🗣️ 어눌한 발음 파악</button>
+              <button type="button" class="mini-pill-btn sim-chip" data-sim="pause">⏸️ 멈칫함 보호</button>
+              <button type="button" class="mini-pill-btn sim-chip" data-sim="silence">⏳ 4.5초 침묵 힌트</button>
+              <button type="button" class="mini-pill-btn sim-chip" data-sim="draw_blocked">🚫 Live 그림 차단</button>
+            </div>
+          </div>
+
+          <div class="parent-action-row">
+            <button type="button" class="mini-pill-btn" id="reset-demo-btn">🔄 초기 데이터 복원</button>
+            <button type="button" class="chunky-btn green" id="save-settings-btn">💾 설정 저장</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Toast -->
+  <div class="toast hidden" id="toast" role="status" aria-live="polite"></div>
+
+  <script src="./js/data.js"></script>
+  <script src="./js/rig.js"></script>
+  <script src="./js/voice.js"></script>
+  <script src="./js/gemini-live.js"></script>
+  <script src="./js/sync.js"></script>
+  <script src="./js/engine.js"></script>
+  <script src="./js/report.js"></script>
+  <script src="./js/app.js"></script>
+</body>
+</html>

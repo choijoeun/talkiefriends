@@ -1,0 +1,13 @@
+{
+  "name": "talkiefriends-kids-english",
+  "version": "5.0.0",
+  "description": "TalkieFriends — 6~7세 블루이·빙고 영어 스토리텔링 & Gemini Live PWA 앱",
+  "main": "server/server.js",
+  "scripts": {
+    "start": "node server/server.js",
+    "dev": "PORT=8765 node server/server.js"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  }
+}

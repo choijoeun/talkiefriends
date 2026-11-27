@@ -1,0 +1,13 @@
+services:
+  - type: web
+    name: talkiefriends-app
+    runtime: node
+    plan: free
+    healthCheckPath: /api/health
+    buildCommand: "echo 'Zero-dependency Node app ready'"
+    startCommand: "node server/server.js"
+    envVars:
+      - key: NODE_VERSION
+        value: "22"
+      - key: GEMINI_API_KEY
+        sync: false

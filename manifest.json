@@ -1,0 +1,27 @@
+{
+  "name": "TalkieFriends — 블루이·빙고 영어놀이",
+  "short_name": "TalkieFriends",
+  "description": "6~7세 아이가 블루이·빙고와 실시간 영어로 역할극·자유 대화를 주고받는 스토리텔링 영어 앱",
+  "start_url": "./index.html",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#FFFBF4",
+  "theme_color": "#499AF5",
+  "lang": "ko",
+  "categories": ["education", "kids"],
+  "icons": [
+    {
+      "src": "./assets/icons/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "./assets/icons/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ]
+}
