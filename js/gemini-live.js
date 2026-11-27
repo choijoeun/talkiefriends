@@ -240,7 +240,7 @@ window.TFGeminiLive = (function () {
   async function connect({
     apiKey,
     useServerToken = false,
-    model = 'gemini-2.5-flash-native-audio-preview-09-2025',
+    model = 'gemini-3.8-live',
     voiceName = 'Puck',
     systemInstruction = '',
     openingPrompt = '',

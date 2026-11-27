@@ -56,7 +56,7 @@
       showKoreanHint: true,
       apiKey: '',
       useGeminiLive: true,
-      liveModel: 'gemini-2.5-flash-native-audio-preview-09-2025',
+      liveModel: 'gemini-3.8-live',
       syncApiKey: false
     }
   };
@@ -123,6 +123,12 @@
           sync: { ...state.sync, ...(saved.sync || {}) },
           settings: { ...state.settings, ...(saved.settings || {}) }
         };
+        if (
+          state.settings.liveModel === 'gemini-2.5-flash-native-audio-preview-09-2025' ||
+          state.settings.liveModel === 'gemini-2.5-flash-native-audio-latest'
+        ) {
+          state.settings.liveModel = 'gemini-3.8-live';
+        }
         return;
       }
     } catch (_) {}
@@ -510,7 +516,7 @@
     const ok = await window.TFGeminiLive.connect({
       apiKey: state.settings.apiKey.trim(),
       useServerToken,
-      model: state.settings.liveModel || 'gemini-2.5-flash-native-audio-preview-09-2025',
+      model: state.settings.liveModel || 'gemini-3.8-live',
       voiceName: ch.geminiVoice || 'Puck',
       systemInstruction,
       openingPrompt,
@@ -1108,7 +1114,7 @@
     $('sync-server-url').value = state.sync.serverUrl || '';
 
     $('setting-use-gemini-live').checked = Boolean(state.settings.useGeminiLive);
-    $('setting-live-model').value = state.settings.liveModel || 'gemini-2.5-flash-native-audio-preview-09-2025';
+    $('setting-live-model').value = state.settings.liveModel || 'gemini-3.8-live';
     $('setting-sync-api-key').checked = Boolean(state.settings.syncApiKey);
     $('setting-auto-hint').checked = state.settings.autoHint;
     $('setting-auto-tts').checked = state.settings.autoTTS;

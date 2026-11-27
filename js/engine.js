@@ -378,22 +378,26 @@ ${activeWeak}
       }));
       contents.push({ role: 'user', parts: [{ text: childText }] });
 
-      const res = await fetch(
-        `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${encodeURIComponent(apiKey)}`,
-        {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            systemInstruction: { parts: [{ text: systemText }] },
-            contents,
-            generationConfig: { temperature: 0.85, responseMimeType: 'application/json' }
-          })
-        }
-      );
-      if (!res.ok) return null;
-      const data = await res.json();
-      const raw = data?.candidates?.[0]?.content?.parts?.[0]?.text;
-      return raw ? JSON.parse(raw) : null;
+      const restModels = ['gemini-3.8-flash', 'gemini-3.5-flash-lite'];
+      for (const modelId of restModels) {
+        const res = await fetch(
+          `https://generativelanguage.googleapis.com/v1beta/models/${modelId}:generateContent?key=${encodeURIComponent(apiKey)}`,
+          {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              systemInstruction: { parts: [{ text: systemText }] },
+              contents,
+              generationConfig: { temperature: 0.85, responseMimeType: 'application/json' }
+            })
+          }
+        );
+        if (!res.ok) continue;
+        const data = await res.json();
+        const raw = data?.candidates?.[0]?.content?.parts?.[0]?.text;
+        if (raw) return JSON.parse(raw);
+      }
+      return null;
     } catch (_) {
       return null;
     }

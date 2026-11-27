@@ -1,5 +1,5 @@
 /* TalkieFriends PWA Service Worker — Offline Shell & Nano Banana Asset Cache */
-const CACHE_NAME = 'talkiefriends-v5.1-pwa';
+const CACHE_NAME = 'talkiefriends-v5.2-pwa';
 const CORE_ASSETS = [
   './',
   './index.html',
