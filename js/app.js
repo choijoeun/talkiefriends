@@ -186,6 +186,11 @@
     return Boolean(caps.hasServerGeminiKey || (state.settings.apiKey && state.settings.apiKey.trim()));
   }
 
+  function unlockAllAudio() {
+    if (window.TFVoice && window.TFVoice.unlockSpeech) window.TFVoice.unlockSpeech();
+    if (window.TFGeminiLive && window.TFGeminiLive.unlockAudio) window.TFGeminiLive.unlockAudio();
+  }
+
   let toastTimer = null;
   function showToast(msg) {
     const el = $('toast');
@@ -647,6 +652,7 @@
   }
 
   function handleGiantButtonClick() {
+    unlockAllAudio();
     if (session.liveConnecting) return;
 
     if (window.TFGeminiLive && window.TFGeminiLive.isConnected()) {
@@ -1965,7 +1971,27 @@
       });
     });
 
+    $('test-speaker-btn').addEventListener('click', () => {
+      unlockAllAudio();
+      const chimeOk = window.TFVoice.playWarmChime();
+      const voices = window.TFVoice.getVoices();
+      const ctxState = window.TFGeminiLive ? window.TFGeminiLive.unlockAudio() : 'unknown';
+      const resultEl = $('gemini-live-test-result');
+      resultEl.textContent = `🔊 차임벨 재생(${chimeOk ? 'OK' : '실패'}) + 영어 음성 재생 중... (AudioContext: ${ctxState}, en-US 음성 ${voices.length}개)`;
+      setTimeout(() => {
+        window.TFVoice.speakEnUS("Hi friend! I'm Bluey! Can you hear my voice?", {
+          pitch: 1.15,
+          rate: 0.9,
+          onStart: () => {
+            resultEl.textContent = `✅ 스피커 & 영어 음성 출력 정상! (AudioContext: ${ctxState}, en-US 음성 ${voices.length}개)`;
+          }
+        });
+      }, 320);
+      showToast('🔊 차임벨과 블루이 인사 소리가 들리나요?');
+    });
+
     $('test-gemini-live-btn').addEventListener('click', async () => {
+      unlockAllAudio();
       const key = $('setting-api-key').value.trim();
       const sel = $('setting-live-model');
       const resultEl = $('gemini-live-test-result');
@@ -1975,20 +2001,21 @@
         showToast('⚠️ API 키를 먼저 입력해 주세요!');
         return;
       }
+      window.TFVoice.playWarmChime();
       btn.disabled = true;
       btn.textContent = '⏳ 실시간 음성 서버 테스트 중...';
-      resultEl.textContent = '🔍 1/2 API 키·지원 모델 확인 및 WebSocket 음성 응답 테스트 중...';
+      resultEl.textContent = '🔍 API 키·지원 모델 확인 및 실제 원어민 음성 수신 테스트 중...';
 
       const res = await window.TFGeminiLive.testConnection({
         apiKey: key,
-        preferredModel: sel.value
+        preferredModel: sel.value,
+        playAudio: true
       });
 
       btn.disabled = false;
-      btn.textContent = '🧪 지금 무료 API 실시간 음성 테스트';
+      btn.textContent = '🧪 무료 API 실시간 음성 테스트';
 
       if (res.ok) {
-        // Ensure working model exists in dropdown and auto-select + save it!
         if (!Array.from(sel.options).some((o) => o.value === res.workingModel)) {
           const opt = document.createElement('option');
           opt.value = res.workingModel;
@@ -2004,8 +2031,8 @@
         updateVoiceModeBadge();
         updateGiantActionButton();
         const captionNote = res.transcript ? ` · 자막: "${res.transcript}"` : '';
-        resultEl.textContent = `${res.message}${captionNote} — 설정 자동 저장 완료! 이제 무대에서 "실시간 놀자!" 버튼을 눌러 바로 대화하세요!`;
-        showToast('🎉 무료 API 실시간 음성 연결 성공! 자동 저장되었어요!');
+        resultEl.textContent = `${res.message}${captionNote} — 자동 저장 완료!`;
+        showToast('🎉 실시간 원어민 음성이 들렸나요? 자동 저장되었어요!');
       } else {
         const listNote = res.availableLiveModels && res.availableLiveModels.length
           ? ` (이 키의 지원 Live 모델: ${res.availableLiveModels.join(', ')})`
@@ -2062,6 +2089,10 @@
       anim: 'idle',
       speak: false
     });
+
+    // Unlock Web Audio & SpeechSynthesis on very first touch/click anywhere (fixes Safari/iOS/Mobile Chrome silence!)
+    document.addEventListener('pointerdown', unlockAllAudio, { once: true });
+    document.addEventListener('touchstart', unlockAllAudio, { once: true });
 
     bindEvents();
     initSyncAndPWA();

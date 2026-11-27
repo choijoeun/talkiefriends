@@ -1,11 +1,10 @@
 /* ==========================================================================
-   TalkieFriends v5.3 — Real-Time Gemini Multimodal Live API Engine (WebSocket)
-   - Hands-free bidirectional audio: 16kHz PCM mic -> Gemini Live -> 24kHz PCM voice
+   TalkieFriends v5.4 — Real-Time Gemini Multimodal Live API Engine (WebSocket)
+   - Persistent gesture-unlocked AudioContext + GainNode (1.35x) for iOS/Safari/Chrome
+   - Safe even-byte PCM16 decoder & dynamic sample-rate parser (never crashes on odd frames)
    - Client-side RMS VAD with 425ms pre-speech ring buffer + activityStart/activityEnd
-     (fixes Gemini 3.8 Live silent-audio server-VAD issue AND saves 80%+ Free Tier quota!)
-   - Echo-safe child barge-in + 1.35s child-friendly pause tolerance
-   - Real-time AnalyserNode RMS audio-driven lip-sync for Bluey & Friends
-   - Built-in 1-click Live Connection & Model Discovery Tester (testConnection)
+   - Speaker-echo-proof barge-in guard (900ms grace + 3 sustained loud frames)
+   - 1-click Live Connection & Audible Speaker Test (plays real received voice!)
    ========================================================================== */
 
 window.TFGeminiLive = (function () {
@@ -16,14 +15,19 @@ window.TFGeminiLive = (function () {
   let micStream = null;
   let captureCtx = null;
   let processorNode = null;
+
+  // Persistent shared playback graph unlocked synchronously on user gesture
   let playbackCtx = null;
+  let gainNode = null;
   let analyserNode = null;
   let nextPlayTime = 0;
   let activeSources = [];
+
   let lipSyncRaf = null;
   let silenceTickInterval = null;
   let connected = false;
   let isModelSpeaking = false;
+  let modelSpeechStartedAt = 0;
   let micRms = 0;
   let currentCallbacks = {};
   let pendingInputTranscript = '';
@@ -32,12 +36,55 @@ window.TFGeminiLive = (function () {
   // Client-side VAD state (works reliably on Gemini 3.8 Live + saves Free Tier tokens!)
   let isUserSpeaking = false;
   let lastSpeechAt = 0;
+  let bargeInStreak = 0;
   let preSpeechRing = [];
   const PRE_SPEECH_CHUNKS = 5; // ~425ms lead-in buffer so child's 1st syllable is never clipped
   const SPEECH_START_IDLE = 0.020;
-  const SPEECH_START_BARGE_IN = 0.052; // higher threshold during AI playback to ignore speaker echo
+  const SPEECH_START_BARGE_IN = 0.11; // high echo-proof threshold during AI speech
+  const BARGE_IN_GRACE_MS = 900; // never self-interrupt during first 900ms of AI voice
+  const BARGE_IN_FRAMES = 3; // ~250ms sustained loud speech required to interrupt AI
   const SPEECH_CONTINUE = 0.014;
-  const CHILD_END_SILENCE_MS = 1350; // generous 1.35s pause tolerance for 6~7yo kids
+  const CHILD_END_SILENCE_MS = 1350;
+
+  function ensurePlaybackGraph() {
+    const AudioCtx = window.AudioContext || window.webkitAudioContext;
+    if (!AudioCtx) return null;
+    if (!playbackCtx || playbackCtx.state === 'closed') {
+      try {
+        playbackCtx = new AudioCtx({ sampleRate: 24000 });
+      } catch (_) {
+        playbackCtx = new AudioCtx();
+      }
+      gainNode = playbackCtx.createGain();
+      gainNode.gain.value = 1.35; // warm, loud & clear on tablet/laptop speakers
+      analyserNode = playbackCtx.createAnalyser();
+      analyserNode.fftSize = 256;
+      gainNode.connect(analyserNode);
+      analyserNode.connect(playbackCtx.destination);
+      nextPlayTime = playbackCtx.currentTime;
+    }
+    if (playbackCtx.state === 'suspended') {
+      playbackCtx.resume().catch(() => {});
+    }
+    return playbackCtx;
+  }
+
+  /**
+   * Call synchronously inside any click/tap handler so Safari/iOS/Chrome permanently unlock audio!
+   */
+  function unlockAudio() {
+    const ctx = ensurePlaybackGraph();
+    if (!ctx) return 'unsupported';
+    try {
+      ctx.resume().catch(() => {});
+      const silentBuf = ctx.createBuffer(1, 1, 24000);
+      const src = ctx.createBufferSource();
+      src.buffer = silentBuf;
+      src.connect(ctx.destination);
+      src.start(0);
+    } catch (_) {}
+    return ctx.state;
+  }
 
   function arrayBufferToBase64(buffer) {
     const bytes = new Uint8Array(buffer);
@@ -51,10 +98,15 @@ window.TFGeminiLive = (function () {
 
   function base64ToInt16(base64) {
     const bin = atob(base64);
-    const len = bin.length;
-    const bytes = new Uint8Array(len);
-    for (let i = 0; i < len; i++) bytes[i] = bin.charCodeAt(i);
+    const evenLen = bin.length & ~1; // Guarantee even byte count so Int16Array never throws RangeError!
+    const bytes = new Uint8Array(evenLen);
+    for (let i = 0; i < evenLen; i++) bytes[i] = bin.charCodeAt(i);
     return new Int16Array(bytes.buffer);
+  }
+
+  function parseSampleRate(mimeType) {
+    const m = String(mimeType || '').match(/rate=(\d+)/i);
+    return m ? Math.max(8000, Math.min(48000, parseInt(m[1], 10))) : 24000;
   }
 
   function downsampleTo16kPCM(float32Data, inputSampleRate) {
@@ -99,38 +151,44 @@ window.TFGeminiLive = (function () {
       nextPlayTime = playbackCtx.currentTime;
     }
     isModelSpeaking = false;
+    bargeInStreak = 0;
     if (currentCallbacks.onSpeakingState) currentCallbacks.onSpeakingState(false, 0);
   }
 
-  function schedulePcm24kPlayback(base64Pcm) {
-    if (!playbackCtx) return;
-    if (playbackCtx.state === 'suspended') {
-      playbackCtx.resume().catch(() => {});
-    }
+  function schedulePcmPlayback(base64Pcm, sampleRate = 24000) {
+    const ctx = ensurePlaybackGraph();
+    if (!ctx) return;
+
     const int16 = base64ToInt16(base64Pcm);
+    if (int16.length === 0) return;
+
     const float32 = new Float32Array(int16.length);
     for (let i = 0; i < int16.length; i++) {
       float32[i] = int16[i] / 32768;
     }
 
-    const audioBuf = playbackCtx.createBuffer(1, float32.length, 24000);
+    const audioBuf = ctx.createBuffer(1, float32.length, sampleRate);
     audioBuf.getChannelData(0).set(float32);
 
-    const src = playbackCtx.createBufferSource();
+    const src = ctx.createBufferSource();
     src.buffer = audioBuf;
-    src.connect(analyserNode);
+    src.connect(gainNode);
 
-    const now = playbackCtx.currentTime;
-    if (nextPlayTime < now + 0.02) nextPlayTime = now + 0.02;
+    const now = ctx.currentTime;
+    if (nextPlayTime < now + 0.025) nextPlayTime = now + 0.025;
     src.start(nextPlayTime);
     nextPlayTime += audioBuf.duration;
 
+    if (!isModelSpeaking) {
+      modelSpeechStartedAt = Date.now();
+    }
     isModelSpeaking = true;
     activeSources.push(src);
     src.onended = () => {
       activeSources = activeSources.filter((s) => s !== src);
       if (activeSources.length === 0) {
         isModelSpeaking = false;
+        bargeInStreak = 0;
         if (currentCallbacks.onSpeakingState) currentCallbacks.onSpeakingState(false, 0);
         if (connected && currentCallbacks.autoHint) {
           startProactiveSilenceWatch();
@@ -232,6 +290,7 @@ window.TFGeminiLive = (function () {
 
     isUserSpeaking = false;
     lastSpeechAt = 0;
+    bargeInStreak = 0;
     preSpeechRing = [];
 
     processorNode.onaudioprocess = (event) => {
@@ -248,18 +307,29 @@ window.TFGeminiLive = (function () {
       const now = Date.now();
 
       if (!isUserSpeaking) {
-        // Keep rolling pre-speech buffer so 1st syllable is never lost
         preSpeechRing.push(b64);
         if (preSpeechRing.length > PRE_SPEECH_CHUNKS) preSpeechRing.shift();
 
-        const startThreshold = isModelSpeaking ? SPEECH_START_BARGE_IN : SPEECH_START_IDLE;
-        if (micRms >= startThreshold) {
+        // Echo-proof speech start detection: never self-interrupt AI from speaker output!
+        let triggered = false;
+        if (isModelSpeaking) {
+          if (now - modelSpeechStartedAt > BARGE_IN_GRACE_MS && micRms >= SPEECH_START_BARGE_IN) {
+            bargeInStreak += 1;
+            if (bargeInStreak >= BARGE_IN_FRAMES) triggered = true;
+          } else {
+            bargeInStreak = 0;
+          }
+        } else if (micRms >= SPEECH_START_IDLE) {
+          triggered = true;
+        }
+
+        if (triggered) {
           isUserSpeaking = true;
+          bargeInStreak = 0;
           lastSpeechAt = now;
           stopSilenceWatch();
           if (isModelSpeaking) clearPlaybackQueue();
 
-          // Explicit manual VAD start + flush pre-speech buffer (works on Gemini 3.8 Live & 2.5!)
           sendJson({ realtimeInput: { activityStart: {} } });
           for (const bufferedChunk of preSpeechRing) {
             sendAudioChunk(bufferedChunk);
@@ -268,7 +338,6 @@ window.TFGeminiLive = (function () {
           if (currentCallbacks.onUserVoiceState) currentCallbacks.onUserVoiceState('speaking');
         }
       } else {
-        // Currently inside child's utterance: keep streaming PCM chunks
         sendAudioChunk(b64);
         if (micRms >= SPEECH_CONTINUE) {
           lastSpeechAt = now;
@@ -287,9 +356,6 @@ window.TFGeminiLive = (function () {
     zeroGain.connect(captureCtx.destination);
   }
 
-  /**
-   * Discover available Live (bidiGenerateContent) models on the user's exact API key!
-   */
   async function discoverLiveModels(apiKey) {
     if (!apiKey) return { ok: false, error: 'API 키를 입력해 주세요.', liveModels: [] };
     try {
@@ -308,19 +374,19 @@ window.TFGeminiLive = (function () {
   }
 
   /**
-   * 1-Click End-to-End Live Connection Diagnostic Test (WebSocket setup + real audio reply check!)
+   * 1-Click End-to-End Live Connection & Audible Speaker Diagnostic Test!
+   * Actually PLAYS the received Gemini Live voice right through your speaker so you hear it!
    */
-  async function testConnection({ apiKey, preferredModel = 'gemini-3.8-live' }) {
+  async function testConnection({ apiKey, preferredModel = 'gemini-3.8-live', playAudio = true }) {
+    unlockAudio();
     const key = (apiKey || '').trim();
     if (!key) return { ok: false, step: 'key', message: 'Gemini API 키를 먼저 입력해 주세요.' };
 
-    // Step 1: Verify API key & discover supported bidiGenerateContent models
     const disc = await discoverLiveModels(key);
     if (!disc.ok) {
       return { ok: false, step: 'key', message: `API 키 확인 실패: ${disc.error}` };
     }
 
-    // Pick best candidate model order: preferred -> gemini-3.8-live -> first discovered live model -> 2.5 preview
     const candidates = [];
     const addUnique = (m) => { if (m && !candidates.includes(m)) candidates.push(m); };
     if (disc.liveModels.includes(preferredModel)) addUnique(preferredModel);
@@ -331,15 +397,17 @@ window.TFGeminiLive = (function () {
 
     let lastFailReason = '';
     for (const modelId of candidates.slice(0, 3)) {
-      const probe = await probeLiveModel(key, modelId);
+      const probe = await probeLiveModel(key, modelId, playAudio);
       if (probe.ok) {
+        const ctxState = playbackCtx ? playbackCtx.state : 'unknown';
         return {
           ok: true,
           workingModel: modelId,
           availableLiveModels: disc.liveModels,
           audioBytes: probe.audioBytes,
           transcript: probe.transcript,
-          message: `✅ 실시간 음성 연결 성공! (모델: ${modelId}, 오디오 ${Math.round(probe.audioBytes / 1024)}KB 수신)`
+          audioContextState: ctxState,
+          message: `✅ 실시간 음성 연결 & 재생 성공! (모델: ${modelId}, 오디오 ${Math.round(probe.audioBytes / 1024)}KB, 스피커: ${ctxState})`
         };
       }
       lastFailReason = `${modelId}: ${probe.reason}`;
@@ -353,7 +421,7 @@ window.TFGeminiLive = (function () {
     };
   }
 
-  function probeLiveModel(apiKey, modelId) {
+  function probeLiveModel(apiKey, modelId, playAudio) {
     return new Promise((resolve) => {
       let settled = false;
       let audioBytes = 0;
@@ -370,7 +438,7 @@ window.TFGeminiLive = (function () {
       };
 
       const timer = setTimeout(() => {
-        finish({ ok: false, reason: gotSetup ? '응답 시간 초과 (10초)' : 'setupComplete 시간 초과' });
+        finish({ ok: audioBytes > 0, audioBytes, transcript: transcript.trim(), reason: gotSetup ? '응답 시간 초과 (10초)' : 'setupComplete 시간 초과' });
       }, 10000);
 
       try {
@@ -404,7 +472,7 @@ window.TFGeminiLive = (function () {
           gotSetup = true;
           testWs.send(JSON.stringify({
             clientContent: {
-              turns: [{ role: 'user', parts: [{ text: 'Say "Hi friend!" in 2 words.' }] }],
+              turns: [{ role: 'user', parts: [{ text: 'Say "Hi friend! Let us play!" warmly in 4 words.' }] }],
               turnComplete: true
             }
           }));
@@ -414,20 +482,23 @@ window.TFGeminiLive = (function () {
         if (!sc) return;
         if (sc.modelTurn?.parts) {
           for (const p of sc.modelTurn.parts) {
-            if (p.inlineData?.data && /audio\/pcm/i.test(p.inlineData.mimeType || '')) {
+            if (p.inlineData?.data && (!p.inlineData.mimeType || /audio/i.test(p.inlineData.mimeType))) {
               audioBytes += Math.floor((p.inlineData.data.length * 3) / 4);
+              if (playAudio) {
+                schedulePcmPlayback(p.inlineData.data, parseSampleRate(p.inlineData.mimeType));
+              }
             }
           }
         }
         if (sc.outputTranscription?.text) transcript += sc.outputTranscription.text;
-        if (sc.turnComplete || audioBytes > 4000) {
+        if (sc.turnComplete) {
           finish({ ok: audioBytes > 0, audioBytes, transcript: transcript.trim(), reason: audioBytes > 0 ? '' : '오디오 데이터 없음' });
         }
       };
 
       testWs.onerror = () => finish({ ok: false, reason: 'WebSocket 오류' });
       testWs.onclose = (ev) => {
-        finish({ ok: false, reason: `code=${ev.code}${ev.reason ? ' ' + ev.reason : ''}` });
+        finish({ ok: audioBytes > 0, audioBytes, transcript: transcript.trim(), reason: `code=${ev.code}${ev.reason ? ' ' + ev.reason : ''}` });
       };
     });
   }
@@ -453,6 +524,7 @@ window.TFGeminiLive = (function () {
     onSilenceNudge
   }) {
     disconnect();
+    ensurePlaybackGraph();
 
     currentCallbacks = {
       autoHint,
@@ -484,7 +556,6 @@ window.TFGeminiLive = (function () {
       },
       inputAudioTranscription: {},
       outputAudioTranscription: {},
-      // Manual client-side RMS VAD with 425ms pre-speech buffer (fixes Gemini 3.8 Live silent audio bug!)
       realtimeInputConfig: {
         automaticActivityDetection: {
           disabled: true
@@ -516,21 +587,6 @@ window.TFGeminiLive = (function () {
       return false;
     }
 
-    // Prepare playback AudioContext + AnalyserNode right inside user click gesture
-    const AudioCtx = window.AudioContext || window.webkitAudioContext;
-    try {
-      playbackCtx = new AudioCtx({ sampleRate: 24000 });
-    } catch (_) {
-      playbackCtx = new AudioCtx();
-    }
-    if (playbackCtx.state === 'suspended') {
-      playbackCtx.resume().catch(() => {});
-    }
-    analyserNode = playbackCtx.createAnalyser();
-    analyserNode.fftSize = 256;
-    analyserNode.connect(playbackCtx.destination);
-    nextPlayTime = playbackCtx.currentTime;
-
     return new Promise((resolve) => {
       let resolved = false;
       const done = (val) => { if (!resolved) { resolved = true; resolve(val); } };
@@ -559,7 +615,6 @@ window.TFGeminiLive = (function () {
           return;
         }
 
-        // 1. Setup complete -> start hands-free mic streaming & opening greeting!
         if (msg.setupComplete) {
           connected = true;
           startLipSyncLoop();
@@ -579,22 +634,19 @@ window.TFGeminiLive = (function () {
         const sc = msg.serverContent;
         if (!sc) return;
 
-        // 2. Barge-in interruption -> immediately stop AI audio
         if (sc.interrupted) {
           clearPlaybackQueue();
           stopSilenceWatch();
         }
 
-        // 3. Incoming 24kHz PCM audio chunks
         if (sc.modelTurn?.parts) {
           for (const part of sc.modelTurn.parts) {
-            if (part.inlineData?.data && /audio\/pcm/i.test(part.inlineData.mimeType || '')) {
-              schedulePcm24kPlayback(part.inlineData.data);
+            if (part.inlineData?.data && (!part.inlineData.mimeType || /audio/i.test(part.inlineData.mimeType))) {
+              schedulePcmPlayback(part.inlineData.data, parseSampleRate(part.inlineData.mimeType));
             }
           }
         }
 
-        // 4. Real-time input & output transcriptions for captions & Parent Report
         if (sc.inputTranscription?.text) {
           pendingInputTranscript += sc.inputTranscription.text;
           if (onUserTranscript) onUserTranscript(pendingInputTranscript.trim(), false);
@@ -604,7 +656,6 @@ window.TFGeminiLive = (function () {
           if (onModelTranscript) onModelTranscript(pendingOutputTranscript.trim(), false);
         }
 
-        // 5. Turn complete
         if (sc.turnComplete) {
           const finalUser = pendingInputTranscript.trim();
           const finalModel = pendingOutputTranscript.trim();
@@ -656,14 +707,14 @@ window.TFGeminiLive = (function () {
   function cleanupAudioAndTimers() {
     stopSilenceWatch();
     isUserSpeaking = false;
+    bargeInStreak = 0;
     preSpeechRing = [];
     if (lipSyncRaf) { cancelAnimationFrame(lipSyncRaf); lipSyncRaf = null; }
     clearPlaybackQueue();
     if (processorNode) { try { processorNode.disconnect(); } catch (_) {} processorNode = null; }
     if (captureCtx) { try { captureCtx.close(); } catch (_) {} captureCtx = null; }
     if (micStream) { micStream.getTracks().forEach((t) => t.stop()); micStream = null; }
-    if (playbackCtx) { try { playbackCtx.close(); } catch (_) {} playbackCtx = null; }
-    analyserNode = null;
+    // Keep persistent playbackCtx unlocked across retries & future turns!
     pendingInputTranscript = '';
     pendingOutputTranscript = '';
   }
@@ -678,6 +729,7 @@ window.TFGeminiLive = (function () {
   }
 
   return {
+    unlockAudio,
     connect,
     disconnect,
     sendText,
