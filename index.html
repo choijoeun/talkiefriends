@@ -18,6 +18,46 @@
   <link rel="stylesheet" href="./styles.css" />
 </head>
 <body>
+  <!-- ==================== FAMILY ACCESS PASSCODE GATE ==================== -->
+  <div class="family-lock-gate hidden" id="family-lock-gate" role="dialog" aria-modal="true" aria-label="우리 가족 입장 비밀번호">
+    <div class="lock-card" id="lock-card-box">
+      <div class="lock-avatar-wrap">
+        <img src="./assets/icons/icon-192.png" alt="TalkieFriends" class="lock-app-icon" />
+      </div>
+      <h2>🔒 우리 가족 영어놀이방</h2>
+      <p class="lock-sub">지정된 가족만 들어올 수 있어요.<br />4자리 가족 암호를 입력해 주세요!</p>
+
+      <div class="pin-dots" id="gate-pin-dots" aria-label="암호 입력 상태">
+        <span class="pin-dot"></span>
+        <span class="pin-dot"></span>
+        <span class="pin-dot"></span>
+        <span class="pin-dot"></span>
+      </div>
+      <div class="lock-error-msg" id="gate-error-msg" aria-live="polite"></div>
+
+      <div class="pin-keypad" id="gate-keypad">
+        <button type="button" class="pin-key" data-digit="1">1</button>
+        <button type="button" class="pin-key" data-digit="2">2</button>
+        <button type="button" class="pin-key" data-digit="3">3</button>
+        <button type="button" class="pin-key" data-digit="4">4</button>
+        <button type="button" class="pin-key" data-digit="5">5</button>
+        <button type="button" class="pin-key" data-digit="6">6</button>
+        <button type="button" class="pin-key" data-digit="7">7</button>
+        <button type="button" class="pin-key" data-digit="8">8</button>
+        <button type="button" class="pin-key" data-digit="9">9</button>
+        <button type="button" class="pin-key pin-action" data-action="clear">지우기</button>
+        <button type="button" class="pin-key" data-digit="0">0</button>
+        <button type="button" class="pin-key pin-action" data-action="back">⌫</button>
+      </div>
+
+      <label class="lock-remember-row">
+        <input type="checkbox" id="gate-remember-device" checked />
+        <span>이 기기 기억하기 (다음부턴 아이가 바로 입장해요!)</span>
+      </label>
+      <p class="lock-safe-note">🔐 API 키와 아이 기록은 내 기기 브라우저에만 안전하게 저장됩니다.</p>
+    </div>
+  </div>
+
   <div class="kid-app">
     <!-- ==================== 1. FULL-BLEED STORYBOOK STAGE ==================== -->
     <main class="theater-stage" id="live-stage-viewport">
@@ -361,17 +401,35 @@
             <p class="kid-guide">바탕화면·태블릿 홈 화면에 블루이 아이콘 앱으로 설치해 브라우저 주소창 없이 전체화면으로 실행할 수 있어요.</p>
             <div class="parent-action-row" style="margin-bottom:0;">
               <button type="button" class="chunky-btn blue" id="pwa-install-btn">📲 앱으로 설치하기</button>
+              <button type="button" class="mini-pill-btn" id="lock-app-now-btn">🔒 지금 화면 잠그기</button>
             </div>
             <p class="tiny-guide">• PC 크롬/엣지·안드로이드: 위 버튼 클릭 (또는 주소창 오른쪽 설치 아이콘)<br />• 아이패드·아이폰 Safari: 하단 <strong>공유(⬆️) → 홈 화면에 추가</strong></p>
           </div>
 
-          <!-- Family Sync Code Card -->
+          <!-- Offline File Backup + 1-Click Transfer Link (Works 100% on GitHub Pages!) -->
           <div class="sync-card">
             <div class="sync-card-head">
-              <h3>☁️ 다른 컴퓨터에서도 내 데이터 그대로 이어쓰기</h3>
+              <h3>💾 다른 컴퓨터·태블릿으로 내 데이터 옮기기 (가장 쉬움!)</h3>
+              <span class="status-chip ready">즉시 사용 가능</span>
+            </div>
+            <p class="kid-guide">서버 설정 없이도 <strong>카톡 링크 1개</strong>로 복습장·캐릭터 성향·수업 기록을 옮기거나, <strong>백업 파일 1개</strong>로 내가 올린 캐릭터 사진까지 100% 그대로 옮길 수 있어요.</p>
+            <div class="parent-action-row" style="margin-bottom:0;">
+              <button type="button" class="chunky-btn green" id="copy-transfer-link-btn">🔗 기기 이동 링크 복사</button>
+              <button type="button" class="chunky-btn warm" id="export-backup-btn">📤 전체 백업 파일 저장</button>
+              <label class="chunky-btn soft-blue upload-btn">
+                📥 백업 파일 불러오기
+                <input type="file" id="import-backup-input" accept=".json,.tfbackup.json" class="sr-only" />
+              </label>
+            </div>
+          </div>
+
+          <!-- Optional Cloud Server Family Sync Code Card -->
+          <div class="sync-card">
+            <div class="sync-card-head">
+              <h3>☁️ (선택) 클라우드 서버 자동 동기화</h3>
               <span class="status-chip" id="sync-server-badge">서버 확인 중...</span>
             </div>
-            <p class="kid-guide">우리 가족 코드만 입력하면 집 PC, 노트북, 태블릿 어디서나 내 캐릭터 사진·취약 복습장·지난 리포트가 자동으로 이어집니다.</p>
+            <p class="kid-guide">Render 등 개인 서버를 연결했을 때 가족 코드로 자동 동기화하는 고급 기능입니다.</p>
             <div class="sync-form-grid">
               <label class="setting-field">
                 <span>🔑 가족 동기화 코드 (예: BLUEY-2026)</span>
@@ -399,21 +457,6 @@
               <button type="button" class="chunky-btn green" id="sync-push-btn">⬆️ 지금 클라우드에 저장</button>
             </div>
             <div class="sync-status-line" id="sync-status-text">가족 코드를 입력하고 저장하면 변경 시 자동 동기화됩니다.</div>
-          </div>
-
-          <!-- Offline File Backup/Restore -->
-          <div class="sync-card">
-            <div class="sync-card-head">
-              <h3>💾 오프라인 파일 백업 · 복원 (서버 없이도 이동)</h3>
-            </div>
-            <p class="kid-guide">서버 없이도 카톡·이메일·USB로 <code>.tfbackup.json</code> 파일 1개만 옮기면 다른 컴퓨터에 내 설정·사진·복습장을 100% 복원해요.</p>
-            <div class="parent-action-row" style="margin-bottom:0;">
-              <button type="button" class="chunky-btn warm" id="export-backup-btn">📤 내 데이터 파일로 저장</button>
-              <label class="chunky-btn soft-blue upload-btn">
-                📥 백업 파일 불러오기
-                <input type="file" id="import-backup-input" accept=".json,.tfbackup.json" class="sr-only" />
-              </label>
-            </div>
           </div>
         </div>
       </div>

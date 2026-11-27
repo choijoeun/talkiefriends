@@ -1328,6 +1328,120 @@
     updateGiantActionButton();
   }
 
+  // ==================== FAMILY ACCESS PASSCODE GATE ====================
+  const FAMILY_UNLOCK_KEY = 'talkiefriends_family_unlocked_v5';
+  let gateEnteredPin = '';
+
+  function renderGateDots() {
+    const dots = document.querySelectorAll('#gate-pin-dots .pin-dot');
+    dots.forEach((d, idx) => d.classList.toggle('filled', idx < gateEnteredPin.length));
+  }
+
+  function lockAppNow() {
+    if (window.TFGeminiLive) window.TFGeminiLive.disconnect();
+    window.TFVoice.stopAllSpeech();
+    localStorage.removeItem(FAMILY_UNLOCK_KEY);
+    gateEnteredPin = '';
+    renderGateDots();
+    $('gate-error-msg').textContent = '';
+    closeAllSheets();
+    $('family-lock-gate').classList.remove('hidden');
+  }
+
+  function initFamilyLockGate() {
+    if (!window.TFSync || !$('family-lock-gate')) return;
+    const expectedToken = window.TFSync.getUnlockToken();
+    const isAlreadyUnlocked = localStorage.getItem(FAMILY_UNLOCK_KEY) === expectedToken;
+    $('family-lock-gate').classList.toggle('hidden', isAlreadyUnlocked);
+
+    async function handlePinDigit(digit) {
+      if ($('family-lock-gate').classList.contains('hidden')) return;
+      if (gateEnteredPin.length >= 4) return;
+      gateEnteredPin += digit;
+      $('gate-error-msg').textContent = '';
+      renderGateDots();
+
+      if (gateEnteredPin.length === 4) {
+        const ok = await window.TFSync.verifyFamilyPasscode(gateEnteredPin);
+        if (ok) {
+          if ($('gate-remember-device').checked) {
+            localStorage.setItem(FAMILY_UNLOCK_KEY, expectedToken);
+          }
+          $('family-lock-gate').classList.add('hidden');
+          gateEnteredPin = '';
+          renderGateDots();
+          showToast('🔓 환영해요! 우리 가족 영어놀이방에 입장했어요!');
+        } else {
+          $('gate-error-msg').textContent = '암호가 맞지 않아요. 다시 입력해 주세요!';
+          const box = $('lock-card-box');
+          box.classList.remove('shake');
+          void box.offsetWidth;
+          box.classList.add('shake');
+          setTimeout(() => {
+            gateEnteredPin = '';
+            renderGateDots();
+          }, 360);
+        }
+      }
+    }
+
+    $('gate-keypad').querySelectorAll('.pin-key').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        if (btn.dataset.digit !== undefined) {
+          handlePinDigit(btn.dataset.digit);
+        } else if (btn.dataset.action === 'clear') {
+          gateEnteredPin = '';
+          $('gate-error-msg').textContent = '';
+          renderGateDots();
+        } else if (btn.dataset.action === 'back') {
+          gateEnteredPin = gateEnteredPin.slice(0, -1);
+          renderGateDots();
+        }
+      });
+    });
+
+    document.addEventListener('keydown', (e) => {
+      if ($('family-lock-gate').classList.contains('hidden')) return;
+      if (/^[0-9]$/.test(e.key)) {
+        handlePinDigit(e.key);
+      } else if (e.key === 'Backspace') {
+        gateEnteredPin = gateEnteredPin.slice(0, -1);
+        renderGateDots();
+      } else if (e.key === 'Escape') {
+        gateEnteredPin = '';
+        renderGateDots();
+      }
+    });
+  }
+
+  function applyIncomingTransferLink() {
+    if (!window.TFSync) return;
+    const incoming = window.TFSync.consumeIncomingTransferLink();
+    if (!incoming) return;
+    if (incoming.activeCharId) state.activeCharId = incoming.activeCharId;
+    if (incoming.activeRoleplayId) state.activeRoleplayId = incoming.activeRoleplayId;
+    if (incoming.activeBgId) state.activeBgId = incoming.activeBgId;
+    if (Array.isArray(incoming.weakExpressions) && incoming.weakExpressions.length) {
+      state.weakExpressions = incoming.weakExpressions;
+    }
+    if (Array.isArray(incoming.sessionHistory) && incoming.sessionHistory.length) {
+      state.sessionHistory = incoming.sessionHistory;
+    }
+    if (Array.isArray(incoming.charPrefs)) {
+      incoming.charPrefs.forEach((p) => {
+        const target = state.characters.find((c) => c.id === p.id);
+        if (target) {
+          target.nameKr = p.nameKr || target.nameKr;
+          target.nameEn = p.nameEn || target.nameEn;
+          target.personality = p.personality || target.personality;
+          if (target.rig && p.accessory) target.rig.accessory = p.accessory;
+        }
+      });
+    }
+    saveState(true);
+    setTimeout(() => showToast('🔗 기기 이동 링크에서 우리 가족 복습장·캐릭터 설정을 불러왔어요!'), 450);
+  }
+
   // ==================== EVENT BINDINGS ====================
   function bindEvents() {
     // Close sheet buttons & backdrop click
@@ -1643,7 +1757,7 @@
       } catch (_) {}
     });
 
-    // Parent Tab 2: PWA Install + Family Cloud Sync + Offline Backup
+    // Parent Tab 2: PWA Install + Family Lock + Transfer Link + Cloud Sync + Offline Backup
     $('pwa-install-btn').addEventListener('click', async () => {
       if (!window.TFSync) return;
       const res = await window.TFSync.triggerPWAInstall();
@@ -1655,6 +1769,21 @@
         showToast('📱 Safari 하단 공유(⬆️) 버튼 → "홈 화면에 추가"를 눌러 설치하세요!');
       } else {
         showToast('💻 브라우저 주소창 오른쪽 설치 아이콘(⊕) 또는 메뉴 → "앱 설치"를 눌러 주세요!');
+      }
+    });
+
+    $('lock-app-now-btn').addEventListener('click', () => {
+      lockAppNow();
+    });
+
+    $('copy-transfer-link-btn').addEventListener('click', async () => {
+      if (!window.TFSync) return;
+      const url = window.TFSync.buildTransferLink(state);
+      try {
+        await navigator.clipboard.writeText(url);
+        showToast('🔗 기기 이동 링크를 복사했어요! 카톡으로 보내서 다른 PC·태블릿에서 열어 보세요!');
+      } catch (_) {
+        window.prompt('아래 링크를 복사해서 다른 기기에서 열어 주세요:', url);
       }
     });
 
@@ -1831,6 +1960,8 @@
 
   function init() {
     loadState();
+    applyIncomingTransferLink();
+    initFamilyLockGate();
     populateVoiceDropdown();
     renderTopBarAndBg();
     renderMissionDots();
