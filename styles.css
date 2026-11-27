@@ -1170,6 +1170,51 @@ button, input, select { font-family: inherit; }
   color: var(--muted);
 }
 
+/* KakaoTalk In-App Browser Helper Banner */
+.kakao-banner {
+  position: fixed;
+  top: 10px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 260;
+  width: min(94vw, 560px);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 10px 14px;
+  border-radius: 18px;
+  background: rgba(254, 229, 0, 0.97);
+  color: #2B2433;
+  border: 2px solid #FFFFFF;
+  box-shadow: 0 12px 30px rgba(0, 0, 0, 0.22);
+}
+.kakao-banner.hidden { display: none; }
+.kakao-banner-text { flex: 1; min-width: 0; font-size: 12px; line-height: 1.35; }
+.kakao-banner-text strong { display: block; font-size: 13px; }
+.kakao-banner-actions { display: flex; align-items: center; gap: 6px; flex-shrink: 0; }
+.kakao-ext-btn {
+  border: none;
+  border-radius: 999px;
+  padding: 8px 13px;
+  background: #2B2433;
+  color: #FFF;
+  font-size: 12px;
+  font-weight: 900;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.kakao-close-btn {
+  border: none;
+  background: rgba(43, 36, 51, 0.14);
+  color: #2B2433;
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  font-weight: 900;
+  cursor: pointer;
+}
+
 @keyframes breatheSoft { 0%,100% { transform: translateY(0) scaleY(1); } 50% { transform: translateY(-4px) scaleY(1.018); } }
 @keyframes breatheHero { 0%,100% { transform: translateY(0) scale(1); } 50% { transform: translateY(-5px) scale(1.022); } }
 @keyframes bouncyIdle { 0%,100% { transform: translateY(0); } 50% { transform: translateY(-7px) rotate(-1deg); } }

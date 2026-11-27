@@ -421,6 +421,45 @@ window.TFGeminiLive = (function () {
     };
   }
 
+  function shouldUseHtmlAudioFallback() {
+    const inApp = Boolean(window.TFVoice && window.TFVoice.isInAppWebView && window.TFVoice.isInAppWebView());
+    const ctxBlocked = !playbackCtx || playbackCtx.state !== 'running';
+    return inApp || ctxBlocked;
+  }
+
+  function playInt16ChunksViaHtmlAudio(chunks, sampleRate, callbacks = {}) {
+    if (!chunks.length || !window.TFVoice || !window.TFVoice.encodePcmInt16ToWavBlobUrl) return;
+    let total = 0;
+    for (const c of chunks) total += c.length;
+    const merged = new Int16Array(total);
+    let offset = 0;
+    for (const c of chunks) {
+      merged.set(c, offset);
+      offset += c.length;
+    }
+    const wavUrl = window.TFVoice.encodePcmInt16ToWavBlobUrl(merged, sampleRate);
+    let lipTimer = null;
+    let toggle = false;
+    isModelSpeaking = true;
+    modelSpeechStartedAt = Date.now();
+    window.TFVoice.playWavBlobUrl(wavUrl, {
+      onStart: () => {
+        if (callbacks.onSpeakingState) {
+          lipTimer = setInterval(() => {
+            toggle = !toggle;
+            callbacks.onSpeakingState(true, toggle ? 0.14 : 0.01);
+          }, 140);
+        }
+      },
+      onEnd: () => {
+        if (lipTimer) { clearInterval(lipTimer); lipTimer = null; }
+        isModelSpeaking = false;
+        if (callbacks.onSpeakingState) callbacks.onSpeakingState(false, 0);
+        if (callbacks.onEnded) callbacks.onEnded();
+      }
+    });
+  }
+
   function probeLiveModel(apiKey, modelId, playAudio) {
     return new Promise((resolve) => {
       let settled = false;
@@ -428,12 +467,18 @@ window.TFGeminiLive = (function () {
       let transcript = '';
       let gotSetup = false;
       let testWs = null;
+      const htmlFallbackChunks = [];
+      let htmlSampleRate = 24000;
+      const useHtmlAudio = playAudio && shouldUseHtmlAudioFallback();
 
       const finish = (res) => {
         if (settled) return;
         settled = true;
         clearTimeout(timer);
         if (testWs) { try { testWs.close(); } catch (_) {} }
+        if (useHtmlAudio && htmlFallbackChunks.length > 0) {
+          playInt16ChunksViaHtmlAudio(htmlFallbackChunks, htmlSampleRate);
+        }
         resolve(res);
       };
 
@@ -484,8 +529,13 @@ window.TFGeminiLive = (function () {
           for (const p of sc.modelTurn.parts) {
             if (p.inlineData?.data && (!p.inlineData.mimeType || /audio/i.test(p.inlineData.mimeType))) {
               audioBytes += Math.floor((p.inlineData.data.length * 3) / 4);
+              htmlSampleRate = parseSampleRate(p.inlineData.mimeType);
               if (playAudio) {
-                schedulePcmPlayback(p.inlineData.data, parseSampleRate(p.inlineData.mimeType));
+                if (useHtmlAudio) {
+                  htmlFallbackChunks.push(base64ToInt16(p.inlineData.data));
+                } else {
+                  schedulePcmPlayback(p.inlineData.data, htmlSampleRate);
+                }
               }
             }
           }
@@ -599,6 +649,9 @@ window.TFGeminiLive = (function () {
         return;
       }
 
+      let liveTurnFallbackChunks = [];
+      let liveTurnSampleRate = 24000;
+
       ws.onopen = () => {
         ws.send(JSON.stringify({ setup: setupObj }));
       };
@@ -621,7 +674,7 @@ window.TFGeminiLive = (function () {
           try {
             await startMicCapture();
           } catch (_) {
-            if (onError) onError('마이크 권한을 허용해 주세요! (텍스트·선택 버튼은 계속 가능해요)');
+            if (onError) onError('마이크 권한이 제한되었어요! (카카오톡 안에서는 크롬·사파리로 열면 마이크가 열려요. 선택 버튼·글자는 바로 가능!)');
           }
           if (onConnected) onConnected();
           if (openingPrompt) {
@@ -635,6 +688,7 @@ window.TFGeminiLive = (function () {
         if (!sc) return;
 
         if (sc.interrupted) {
+          liveTurnFallbackChunks = [];
           clearPlaybackQueue();
           stopSilenceWatch();
         }
@@ -642,7 +696,12 @@ window.TFGeminiLive = (function () {
         if (sc.modelTurn?.parts) {
           for (const part of sc.modelTurn.parts) {
             if (part.inlineData?.data && (!part.inlineData.mimeType || /audio/i.test(part.inlineData.mimeType))) {
-              schedulePcmPlayback(part.inlineData.data, parseSampleRate(part.inlineData.mimeType));
+              liveTurnSampleRate = parseSampleRate(part.inlineData.mimeType);
+              if (shouldUseHtmlAudioFallback()) {
+                liveTurnFallbackChunks.push(base64ToInt16(part.inlineData.data));
+              } else {
+                schedulePcmPlayback(part.inlineData.data, liveTurnSampleRate);
+              }
             }
           }
         }
@@ -664,7 +723,17 @@ window.TFGeminiLive = (function () {
           if (finalUser && onUserTranscript) onUserTranscript(finalUser, true);
           if (finalModel && onModelTranscript) onModelTranscript(finalModel, true);
           if (onTurnComplete) onTurnComplete({ userText: finalUser, modelText: finalModel });
-          if (!isModelSpeaking && currentCallbacks.autoHint) {
+
+          if (liveTurnFallbackChunks.length > 0) {
+            const chunksToPlay = liveTurnFallbackChunks;
+            liveTurnFallbackChunks = [];
+            playInt16ChunksViaHtmlAudio(chunksToPlay, liveTurnSampleRate, {
+              onSpeakingState: currentCallbacks.onSpeakingState,
+              onEnded: () => {
+                if (connected && currentCallbacks.autoHint) startProactiveSilenceWatch();
+              }
+            });
+          } else if (!isModelSpeaking && currentCallbacks.autoHint) {
             startProactiveSilenceWatch();
           }
         }

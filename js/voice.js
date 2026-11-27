@@ -1,25 +1,108 @@
 /* ==========================================================================
-   TalkieFriends v5.4 — Rock-Solid American English (en-US) Voice Engine
-   - Fixes Chrome/Safari silent TTS bugs (cancel/speak race, GC collection,
-     paused queue lock, cloud-voice hang, iOS/Safari autoplay gesture lock)
-   - Prefers reliable local en-US voices with automatic fallback watchdog
-   - Built-in Web Audio chime & audio unlock helper
+   TalkieFriends v5.5 — Universal American English (en-US) Voice Engine
+   - Works in Chrome, Safari, iOS/Android PWA AND KakaoTalk In-App Browser!
+   - Unlocks iOS/KakaoTalk audio session via <audio playsinline> silent WAV
+   - Auto-falls back to Gemini TTS (<audio> WAV) when WebView lacks
+     speechSynthesis voices (e.g. Android KakaoTalk WebView!)
+   - Fixes Chrome/Safari silent TTS bugs (cancel/speak race, GC, cloud hang)
    - Strict NO-TTS rule for Parent Report
    ========================================================================== */
 
 window.TFVoice = (function () {
   let availableEnUsVoices = [];
   let selectedVoiceURI = '';
+  let geminiApiKey = '';
   let recognition = null;
   let isListening = false;
   let silenceInterval = null;
   let silenceStart = 0;
-  let activeUtter = null; // Prevent Chrome garbage-collecting utterance mid-speech!
+  let activeUtter = null;
   let speakDelayTimer = null;
   let startWatchdog = null;
   let speechUnlocked = false;
-  let chimeCtx = null;
+  let sharedAudioEl = null;
+  let currentBlobUrl = null;
   const SILENCE_LIMIT_MS = 4500;
+
+  // Tiny 46-byte valid silent WAV data URI — forces iOS/KakaoTalk WKWebView into loud Playback session!
+  const SILENT_WAV_DATA_URI = 'data:audio/wav;base64,UklGRigAAABXQVZFZm10IBIAAAABAAEARKwAAIhYAQACABAAAABkYXRhAgAAAAEA';
+
+  function isKakaoInApp() {
+    return /KAKAOTALK/i.test(navigator.userAgent || '');
+  }
+
+  function isInAppWebView() {
+    return /KAKAOTALK|NAVER|Instagram|FBAN|FBAV|Line\//i.test(navigator.userAgent || '');
+  }
+
+  function getSharedAudioEl() {
+    if (!sharedAudioEl) {
+      sharedAudioEl = document.createElement('audio');
+      sharedAudioEl.setAttribute('playsinline', '');
+      sharedAudioEl.setAttribute('webkit-playsinline', '');
+      sharedAudioEl.preload = 'auto';
+      sharedAudioEl.volume = 1.0;
+    }
+    return sharedAudioEl;
+  }
+
+  function encodePcmInt16ToWavBlobUrl(int16Samples, sampleRate = 24000) {
+    const numBytes = int16Samples.length * 2;
+    const buffer = new ArrayBuffer(44 + numBytes);
+    const view = new DataView(buffer);
+    const writeStr = (off, s) => {
+      for (let i = 0; i < s.length; i++) view.setUint8(off + i, s.charCodeAt(i));
+    };
+    writeStr(0, 'RIFF');
+    view.setUint32(4, 36 + numBytes, true);
+    writeStr(8, 'WAVE');
+    writeStr(12, 'fmt ');
+    view.setUint32(16, 16, true); // PCM chunk size
+    view.setUint16(20, 1, true); // PCM format
+    view.setUint16(22, 1, true); // mono
+    view.setUint32(24, sampleRate, true);
+    view.setUint32(28, sampleRate * 2, true);
+    view.setUint16(32, 2, true);
+    view.setUint16(34, 16, true);
+    writeStr(36, 'data');
+    view.setUint32(40, numBytes, true);
+    const out = new Int16Array(buffer, 44);
+    out.set(int16Samples);
+    return URL.createObjectURL(new Blob([buffer], { type: 'audio/wav' }));
+  }
+
+  function base64ToWavBlobUrl(base64Data, mimeType = '') {
+    const bin = atob(base64Data);
+    // If Gemini already returned a complete WAV container ("RIFF"), use it directly!
+    if (bin.length > 4 && bin.slice(0, 4) === 'RIFF') {
+      const raw = new Uint8Array(bin.length);
+      for (let i = 0; i < bin.length; i++) raw[i] = bin.charCodeAt(i);
+      return URL.createObjectURL(new Blob([raw], { type: 'audio/wav' }));
+    }
+    const evenLen = bin.length & ~1;
+    const bytes = new Uint8Array(evenLen);
+    for (let i = 0; i < evenLen; i++) bytes[i] = bin.charCodeAt(i);
+    const rateMatch = String(mimeType || '').match(/rate=(\d+)/i);
+    const sampleRate = rateMatch ? parseInt(rateMatch[1], 10) : 24000;
+    return encodePcmInt16ToWavBlobUrl(new Int16Array(bytes.buffer), sampleRate);
+  }
+
+  function playWavBlobUrl(url, { onStart, onEnd } = {}) {
+    const audio = getSharedAudioEl();
+    if (currentBlobUrl && currentBlobUrl !== url) {
+      try { URL.revokeObjectURL(currentBlobUrl); } catch (_) {}
+    }
+    currentBlobUrl = url;
+    audio.onplay = () => { if (onStart) onStart(); };
+    audio.onended = () => { if (onEnd) onEnd(); };
+    audio.onerror = () => { if (onEnd) onEnd(); };
+    audio.src = url;
+    audio.currentTime = 0;
+    const p = audio.play();
+    if (p && p.catch) {
+      p.catch(() => { if (onEnd) onEnd(); });
+    }
+  }
 
   function loadEnUsVoices(onLoaded) {
     if (!('speechSynthesis' in window)) {
@@ -33,7 +116,6 @@ window.TFVoice = (function () {
       if (us.length === 0) {
         us = all.filter((v) => /^en/i.test(v.lang));
       }
-      // Prefer reliable LOCAL voices first (cloud "Google US English" often hangs silently on desktop/mobile)
       const preferredOrder = ['Samantha', 'Ava', 'Aria', 'Jenny', 'Zira', 'Alex', 'Google US English'];
       us.sort((a, b) => {
         if (Boolean(a.localService) !== Boolean(b.localService)) {
@@ -54,7 +136,6 @@ window.TFVoice = (function () {
     if (window.speechSynthesis.onvoiceschanged !== undefined) {
       window.speechSynthesis.onvoiceschanged = gather;
     }
-    // Retry once after 400ms for browsers that populate voices asynchronously without firing event
     setTimeout(gather, 400);
   }
 
@@ -62,14 +143,27 @@ window.TFVoice = (function () {
     selectedVoiceURI = uri;
   }
 
+  function setApiKey(key) {
+    geminiApiKey = (key || '').trim();
+  }
+
   function getVoices() {
     return availableEnUsVoices;
   }
 
   /**
-   * Call synchronously inside any user tap/click so iOS/Safari/Chrome unlock TTS & Web Audio!
+   * Call synchronously inside any user tap/click to unlock BOTH <audio> (KakaoTalk/iOS!) AND speechSynthesis!
    */
   function unlockSpeech() {
+    try {
+      const audio = getSharedAudioEl();
+      if (audio.paused && !audio.src) {
+        audio.src = SILENT_WAV_DATA_URI;
+        const p = audio.play();
+        if (p && p.catch) p.catch(() => {});
+      }
+    } catch (_) {}
+
     if (!speechUnlocked && 'speechSynthesis' in window) {
       try {
         window.speechSynthesis.resume();
@@ -83,33 +177,79 @@ window.TFVoice = (function () {
   }
 
   /**
-   * Play a gentle 2-note storybook marimba chime to verify device speakers work!
+   * Synthesize a real 16-bit PCM WAV chime played via HTML5 <audio> — works even in KakaoTalk Android/iOS!
    */
   function playWarmChime() {
     try {
-      const AudioCtx = window.AudioContext || window.webkitAudioContext;
-      if (!chimeCtx || chimeCtx.state === 'closed') chimeCtx = new AudioCtx();
-      if (chimeCtx.state === 'suspended') chimeCtx.resume().catch(() => {});
-
-      const now = chimeCtx.currentTime;
-      const notes = [523.25, 659.25, 783.99]; // C5 - E5 - G5 happy chord
-      notes.forEach((freq, i) => {
-        const osc = chimeCtx.createOscillator();
-        const gain = chimeCtx.createGain();
-        osc.type = 'triangle';
-        osc.frequency.setValueAtTime(freq, now + i * 0.09);
-        gain.gain.setValueAtTime(0.001, now + i * 0.09);
-        gain.gain.exponentialRampToValueAtTime(0.22, now + i * 0.09 + 0.02);
-        gain.gain.exponentialRampToValueAtTime(0.001, now + i * 0.09 + 0.28);
-        osc.connect(gain);
-        gain.connect(chimeCtx.destination);
-        osc.start(now + i * 0.09);
-        osc.stop(now + i * 0.09 + 0.3);
-      });
+      const sampleRate = 22050;
+      const durationSec = 0.48;
+      const total = Math.floor(sampleRate * durationSec);
+      const samples = new Int16Array(total);
+      const notes = [
+        { f: 523.25, t0: 0.0, t1: 0.16 },
+        { f: 659.25, t0: 0.11, t1: 0.28 },
+        { f: 783.99, t0: 0.22, t1: 0.47 }
+      ];
+      for (let i = 0; i < total; i++) {
+        const t = i / sampleRate;
+        let val = 0;
+        for (const n of notes) {
+          if (t >= n.t0 && t <= n.t1) {
+            const env = Math.min(1, (t - n.t0) / 0.015) * Math.exp(-(t - n.t0) * 9);
+            val += Math.sin(2 * Math.PI * n.f * t) * env * 0.32;
+          }
+        }
+        samples[i] = Math.max(-32767, Math.min(32767, Math.round(val * 32767)));
+      }
+      const wavUrl = encodePcmInt16ToWavBlobUrl(samples, sampleRate);
+      playWavBlobUrl(wavUrl);
       return true;
     } catch (_) {
       return false;
     }
+  }
+
+  /**
+   * Gemini REST TTS fallback -> WAV Blob played through HTML5 <audio> (makes KakaoTalk Android/iOS speak clearly!)
+   */
+  async function speakViaGeminiTTS(text, options = {}) {
+    const key = (options.apiKey || geminiApiKey || '').trim();
+    if (!key) return false;
+    const voiceName = options.geminiVoice || 'Puck';
+    const models = ['gemini-2.5-flash-preview-tts', 'gemini-3.8-flash-tts', 'gemini-3.8-flash-lite-tts'];
+
+    for (const modelId of models) {
+      try {
+        const res = await fetch(
+          `https://generativelanguage.googleapis.com/v1beta/models/${modelId}:generateContent?key=${encodeURIComponent(key)}`,
+          {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              contents: [{ parts: [{ text: `Say cheerfully and warmly to a 6-year-old child in clear American English: ${text}` }] }],
+              generationConfig: {
+                responseModalities: ['AUDIO'],
+                speechConfig: {
+                  voiceConfig: {
+                    prebuiltVoiceConfig: { voiceName }
+                  }
+                }
+              }
+            })
+          }
+        );
+        if (!res.ok) continue;
+        const data = await res.json();
+        const parts = data?.candidates?.[0]?.content?.parts || [];
+        const audioPart = parts.find((p) => p.inlineData?.data);
+        if (audioPart) {
+          const wavUrl = base64ToWavBlobUrl(audioPart.inlineData.data, audioPart.inlineData.mimeType);
+          playWavBlobUrl(wavUrl, { onStart: options.onStart, onEnd: options.onEnd });
+          return true;
+        }
+      } catch (_) {}
+    }
+    return false;
   }
 
   function stopAllSpeech() {
@@ -117,6 +257,9 @@ window.TFVoice = (function () {
     if (speakDelayTimer) { clearTimeout(speakDelayTimer); speakDelayTimer = null; }
     if (startWatchdog) { clearTimeout(startWatchdog); startWatchdog = null; }
     activeUtter = null;
+    if (sharedAudioEl) {
+      try { sharedAudioEl.pause(); sharedAudioEl.currentTime = 0; } catch (_) {}
+    }
     if ('speechSynthesis' in window) {
       try { window.speechSynthesis.cancel(); } catch (_) {}
     }
@@ -124,10 +267,11 @@ window.TFVoice = (function () {
 
   /**
    * Speak in clear, warm standard American English (en-US).
+   * Automatically falls back to Gemini Cloud TTS (<audio> WAV) in KakaoTalk / WebViews without TTS voices!
    * NEVER call this for Parent Reports (Rule 5).
    */
   function speakEnUS(text, options = {}) {
-    if (!text || !('speechSynthesis' in window)) {
+    if (!text) {
       if (options.onEnd) options.onEnd();
       return;
     }
@@ -135,9 +279,24 @@ window.TFVoice = (function () {
     if (speakDelayTimer) { clearTimeout(speakDelayTimer); speakDelayTimer = null; }
     if (startWatchdog) { clearTimeout(startWatchdog); startWatchdog = null; }
 
-    // Refresh voice list if still empty
-    if (availableEnUsVoices.length === 0) {
+    const hasApiKey = Boolean((options.apiKey || geminiApiKey || '').trim());
+    const synthSupported = 'speechSynthesis' in window;
+
+    if (synthSupported && availableEnUsVoices.length === 0) {
       loadEnUsVoices();
+    }
+
+    // In KakaoTalk / In-App WebViews (where Android speechSynthesis is broken/empty), use Gemini <audio> TTS directly if key exists!
+    if ((!synthSupported || (isInAppWebView() && availableEnUsVoices.length === 0)) && hasApiKey) {
+      speakViaGeminiTTS(text, options).then((ok) => {
+        if (!ok && options.onEnd) options.onEnd();
+      });
+      return;
+    }
+
+    if (!synthSupported) {
+      if (options.onEnd) options.onEnd();
+      return;
     }
 
     const synth = window.speechSynthesis;
@@ -172,6 +331,18 @@ window.TFVoice = (function () {
         if (options.onEnd) options.onEnd();
       };
 
+      const fallbackOrFinish = () => {
+        if (hasApiKey && !started) {
+          if (startWatchdog) { clearTimeout(startWatchdog); startWatchdog = null; }
+          if (activeUtter === utter) activeUtter = null;
+          speakViaGeminiTTS(text, options).then((ok) => {
+            if (!ok) finish();
+          });
+        } else {
+          finish();
+        }
+      };
+
       utter.onstart = () => {
         started = true;
         if (startWatchdog) { clearTimeout(startWatchdog); startWatchdog = null; }
@@ -180,29 +351,27 @@ window.TFVoice = (function () {
       utter.onend = finish;
       utter.onerror = () => {
         if (!useDefaultVoiceFallback && !started) {
-          // Retry once with OS default en-US voice if chosen voice errored
           doSpeak(true);
         } else {
-          finish();
+          fallbackOrFinish();
         }
       };
 
       synth.speak(utter);
 
-      // Watchdog: if remote/cloud voice hangs silently without firing onstart, fallback to OS default voice!
       startWatchdog = setTimeout(() => {
         if (!started && !ended && activeUtter === utter) {
           if (!useDefaultVoiceFallback) {
             try { synth.cancel(); } catch (_) {}
             setTimeout(() => doSpeak(true), 40);
           } else {
-            finish();
+            try { synth.cancel(); } catch (_) {}
+            fallbackOrFinish();
           }
         }
-      }, 1400);
+      }, 1300);
     };
 
-    // Critical Chrome/Safari fix: wait 45ms after cancel() before speak() so browser doesn't drop the new utterance!
     if (needCancel) {
       speakDelayTimer = setTimeout(() => doSpeak(false), 45);
     } else {
@@ -241,7 +410,7 @@ window.TFVoice = (function () {
   function startListening({ onStart, onInterim, onResult, onEnd, onError }) {
     const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
     if (!SR) {
-      if (onError) onError('이 브라우저에서는 음성 인식을 지원하지 않아요. 아래 입력창이나 선택 버튼을 이용해 주세요!');
+      if (onError) onError('이 브라우저에서는 마이크 음성 인식을 지원하지 않아요. 크롬·사파리로 열거나 아래 선택 버튼을 이용해 주세요!');
       return false;
     }
 
@@ -305,7 +474,7 @@ window.TFVoice = (function () {
       recognition.start();
       return true;
     } catch (_) {
-      if (onError) onError('마이크를 시작할 수 없어요. 권한을 확인해 주세요.');
+      if (onError) onError('마이크를 시작할 수 없어요. 크롬·사파리에서 열어 마이크 권한을 허용해 주세요.');
       return false;
     }
   }
@@ -319,11 +488,16 @@ window.TFVoice = (function () {
 
   return {
     SILENCE_LIMIT_MS,
+    isKakaoInApp,
+    isInAppWebView,
     loadEnUsVoices,
     setVoiceURI,
+    setApiKey,
     getVoices,
     unlockSpeech,
     playWarmChime,
+    encodePcmInt16ToWavBlobUrl,
+    playWavBlobUrl,
     stopAllSpeech,
     speakEnUS,
     startSilenceTimer,

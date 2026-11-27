@@ -1,5 +1,5 @@
 /* TalkieFriends PWA Service Worker — Offline Shell & Nano Banana Asset Cache */
-const CACHE_NAME = 'talkiefriends-v5.4-audiofix';
+const CACHE_NAME = 'talkiefriends-v5.5-kakaoaudio';
 const CORE_ASSETS = [
   './',
   './index.html',

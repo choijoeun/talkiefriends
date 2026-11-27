@@ -407,6 +407,7 @@
       window.TFVoice.speakEnUS(en, {
         pitch: ch.pitch,
         rate: ch.rate,
+        geminiVoice: ch.geminiVoice || 'Puck',
         onStart: () => renderLivePuppet('speaking'),
         onEnd: () => {
           renderLivePuppet(anim || 'idle');
@@ -1973,20 +1974,26 @@
 
     $('test-speaker-btn').addEventListener('click', () => {
       unlockAllAudio();
+      const key = $('setting-api-key').value.trim() || state.settings.apiKey;
+      if (window.TFVoice.setApiKey) window.TFVoice.setApiKey(key);
       const chimeOk = window.TFVoice.playWarmChime();
       const voices = window.TFVoice.getVoices();
+      const isKakao = window.TFVoice.isKakaoInApp && window.TFVoice.isKakaoInApp();
       const ctxState = window.TFGeminiLive ? window.TFGeminiLive.unlockAudio() : 'unknown';
       const resultEl = $('gemini-live-test-result');
-      resultEl.textContent = `🔊 차임벨 재생(${chimeOk ? 'OK' : '실패'}) + 영어 음성 재생 중... (AudioContext: ${ctxState}, en-US 음성 ${voices.length}개)`;
+      const modeHint = isKakao ? (key ? '카톡→Gemini WAV 음성 사용' : '카톡 인앱 감지 · API 키 또는 크롬/사파리 권장') : `en-US 음성 ${voices.length}개`;
+      resultEl.textContent = `🔊 차임벨 재생(${chimeOk ? 'OK' : '실패'}) + 영어 음성 재생 중... (${modeHint}, AudioContext: ${ctxState})`;
       setTimeout(() => {
         window.TFVoice.speakEnUS("Hi friend! I'm Bluey! Can you hear my voice?", {
           pitch: 1.15,
           rate: 0.9,
+          apiKey: key,
+          geminiVoice: getActiveChar().geminiVoice || 'Puck',
           onStart: () => {
-            resultEl.textContent = `✅ 스피커 & 영어 음성 출력 정상! (AudioContext: ${ctxState}, en-US 음성 ${voices.length}개)`;
+            resultEl.textContent = `✅ 스피커 & 영어 음성 출력 정상! (${modeHint}, AudioContext: ${ctxState})`;
           }
         });
-      }, 320);
+      }, 480);
       showToast('🔊 차임벨과 블루이 인사 소리가 들리나요?');
     });
 
@@ -2001,6 +2008,7 @@
         showToast('⚠️ API 키를 먼저 입력해 주세요!');
         return;
       }
+      if (window.TFVoice.setApiKey) window.TFVoice.setApiKey(key);
       window.TFVoice.playWarmChime();
       btn.disabled = true;
       btn.textContent = '⏳ 실시간 음성 서버 테스트 중...';
@@ -2052,6 +2060,7 @@
       state.settings.showKoreanHint = $('setting-show-kr').checked;
       state.settings.apiKey = $('setting-api-key').value.trim();
       window.TFVoice.setVoiceURI(state.settings.voiceURI);
+      if (window.TFVoice.setApiKey) window.TFVoice.setApiKey(state.settings.apiKey);
       saveState();
       updateVoiceModeBadge();
       updateGiantActionButton();
@@ -2070,10 +2079,29 @@
       closeAllSheets();
       showToast('🔄 초기 상태로 복원했어요!');
     });
+
+    // KakaoTalk In-App Browser 1-tap external jump
+    if ($('open-external-browser-btn')) {
+      $('open-external-browser-btn').addEventListener('click', () => {
+        const target = window.location.href;
+        window.location.href = `kakaotalk://web/openExternal?url=${encodeURIComponent(target)}`;
+      });
+    }
+    if ($('dismiss-kakao-banner-btn')) {
+      $('dismiss-kakao-banner-btn').addEventListener('click', () => {
+        $('kakao-browser-banner').classList.add('hidden');
+      });
+    }
   }
 
   function init() {
     loadState();
+    if (window.TFVoice && window.TFVoice.setApiKey) {
+      window.TFVoice.setApiKey(state.settings.apiKey || '');
+    }
+    if (window.TFVoice && window.TFVoice.isKakaoInApp && window.TFVoice.isKakaoInApp() && $('kakao-browser-banner')) {
+      $('kakao-browser-banner').classList.remove('hidden');
+    }
     applyIncomingTransferLink();
     initFamilyLockGate();
     populateVoiceDropdown();
@@ -2090,7 +2118,7 @@
       speak: false
     });
 
-    // Unlock Web Audio & SpeechSynthesis on very first touch/click anywhere (fixes Safari/iOS/Mobile Chrome silence!)
+    // Unlock Web Audio & SpeechSynthesis on very first touch/click anywhere (fixes Safari/iOS/Mobile Chrome/KakaoTalk silence!)
     document.addEventListener('pointerdown', unlockAllAudio, { once: true });
     document.addEventListener('touchstart', unlockAllAudio, { once: true });
 
